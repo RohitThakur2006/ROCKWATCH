@@ -269,44 +269,61 @@ footer {
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
-# --- REALISTIC OPEN-PIT 3D MESH GENERATION ---
+# --- REALISTIC ASYMMETRIC OPEN-PIT MINE 3D GEOMETRY ---
 @st.cache_data
-def generate_realistic_pit_topography(n_grid: int = 80):
-    x = np.linspace(-360, 360, n_grid)
-    y = np.linspace(-360, 360, n_grid)
+def generate_realistic_pit_topography(n_grid: int = 85):
+    x = np.linspace(-380, 380, n_grid)
+    y = np.linspace(-380, 380, n_grid)
     X, Y = np.meshgrid(x, y)
-    R = np.sqrt(X**2 + Y**2)
-    Theta = np.arctan2(Y, X) % (2 * np.pi)
 
-    R_crest = 330.0
-    R_floor = 65.0
+    # 1. Multi-Lobed Asymmetric Open-Pit Geometry (North Pit Lobe + South Expansion Lobe)
+    r1 = np.sqrt(((X - 15) / 1.25)**2 + ((Y - 45) / 0.88)**2)
+    r2 = np.sqrt(((X + 30) / 1.05)**2 + ((Y + 75) / 1.18)**2)
+    k = 0.04
+    # Smooth minimum blend of the two pit lobes
+    R_pit = -np.log(np.exp(-k * r1) + np.exp(-k * r2)) / k
+
+    R_crest = 280.0
+    R_floor = 55.0
     Z_crest = 310.0
-    Z_floor = 50.0
+    Z_floor = 60.0
     bench_h = 24.0
     bench_w = 26.0
 
-    # Stepped Terraces (Benches & Safety Berms)
-    dr = np.clip(R_crest - R, 0.0, R_crest - R_floor)
+    # 2. Stepped Bench Terraces & Catch Berms
+    dr = np.clip(R_crest - R_pit, 0.0, R_crest - R_floor)
     bench_idx = np.floor(dr / bench_w)
     frac = (dr % bench_w) / bench_w
     bench_drop = np.where(frac < 0.65, (frac / 0.65) * bench_h, bench_h)
     Z = Z_crest - (bench_idx * bench_h + bench_drop)
-    Z[R > R_crest] = Z_crest
-    Z[R < R_floor] = Z_floor
+    Z[R_pit < R_floor] = Z_floor
 
-    # Spiral Haulage Ramp (22m road width carved into the pit wall)
+    # 3. Surrounding Natural Mountain Ridges & Valleys outside Crest
+    ridge = 32.0 * np.sin(X / 115.0) * np.cos(Y / 125.0) + 16.0 * np.sin((X + Y) / 85.0)
+    crest_mask = R_pit >= R_crest
+    blend = np.clip((R_pit - R_crest) / 45.0, 0.0, 1.0)
+    Z[crest_mask] = Z_crest + (ridge * blend)[crest_mask]
+
+    # 4. External Terraced Waste Dump (South-West Plateau)
+    dump_dist = np.sqrt((X + 270)**2 + (Y + 230)**2)
+    in_dump = (dump_dist < 110) & (X < -160) & (Y < -130)
+    dump_lifts = np.floor(np.clip(110 - dump_dist, 0, 90) / 28) * 18.0
+    Z[in_dump] = np.maximum(Z[in_dump], 305.0 + dump_lifts[in_dump])
+
+    # 5. Spiral Switchback Haul Road (22m road width cut into pit face)
+    Theta = np.arctan2(Y, X) % (2 * np.pi)
     ramp_radius = R_crest - (Theta / (2 * np.pi)) * (R_crest - R_floor)
-    ramp_dist = np.abs(R - ramp_radius)
-    on_ramp = (ramp_dist < 14.0) & (R < R_crest) & (R > R_floor)
+    ramp_dist = np.abs(R_pit - ramp_radius)
+    on_ramp = (ramp_dist < 15.0) & (R_pit < R_crest) & (R_pit > R_floor)
     ramp_elevation = Z_crest - (Theta / (2 * np.pi)) * (Z_crest - Z_floor)
     Z[on_ramp] = ramp_elevation[on_ramp]
 
-    # Sector ID Assignment
+    # Sector ID Assignment across pit domains
     sector_id_map = np.zeros_like(Z, dtype=int)
-    sector_id_map[(Y > 50) & (R < R_crest) & (R > 65)] = 1
-    sector_id_map[(Y < -60) & (R < R_crest) & (R > 65)] = 2
-    sector_id_map[(X > 40) & (Y >= -50) & (Y <= 50) & (R < R_crest)] = 3
-    sector_id_map[(X < -50) & (Y >= -50) & (Y <= 50) & (R < R_crest)] = 4
+    sector_id_map[(Y > 40) & (R_pit < R_crest) & (R_pit > 60)] = 1   # North Wall
+    sector_id_map[(Y < -50) & (R_pit < R_crest) & (R_pit > 60)] = 2  # South Crest
+    sector_id_map[(X > 35) & (Y >= -40) & (Y <= 40) & (R_pit < R_crest)] = 3  # Ramp 3
+    sector_id_map[(X < -45) & (Y >= -40) & (Y <= 40) & (R_pit < R_crest)] = 4  # Haul Road
 
     return X, Y, Z, sector_id_map
 
@@ -339,7 +356,7 @@ def build_3d_pit_figure(X, Y, Z, sector_id_map, sector_telemetries, selected_sec
                 custom_data[i, j, 2] = level
             else:
                 surf_color[i, j] = 0.4
-                custom_data[i, j, 0] = "Surrounding Crest"
+                custom_data[i, j, 0] = "Surrounding Crest / Waste Dump"
                 custom_data[i, j, 1] = "0.40 mm/hr"
                 custom_data[i, j, 2] = "GREEN"
 
@@ -354,7 +371,7 @@ def build_3d_pit_figure(X, Y, Z, sector_id_map, sector_telemetries, selected_sec
 
     fig = go.Figure()
 
-    # 1. Main Stepped Pit Surface
+    # 1. Main Multi-Lobe Stepped Pit Surface
     fig.add_trace(go.Surface(
         x=X, y=Y, z=Z,
         surfacecolor=surf_color,
@@ -381,10 +398,10 @@ def build_3d_pit_figure(X, Y, Z, sector_id_map, sector_telemetries, selected_sec
 
     # 2. 3D Floating Station Billboard Pins above sectors
     station_pins = [
-        {"key": "ZONE_NORTH_WALL", "label": "📍 NORTH WALL BENCH 4", "x": 0, "y": 210, "z": 240},
-        {"key": "ZONE_SOUTH_CREST", "label": "📍 SOUTH CREST RAMP", "x": 0, "y": -210, "z": 240},
-        {"key": "ZONE_RAMP_3", "label": "📍 MAIN HAULAGE RAMP 3", "x": 190, "y": 0, "z": 200},
-        {"key": "ZONE_HAUL_ROAD", "label": "📍 WEST PIT ACCESS ROAD", "x": -190, "y": 0, "z": 200},
+        {"key": "ZONE_NORTH_WALL", "label": "📍 NORTH WALL BENCH 4", "x": 15, "y": 185, "z": 240},
+        {"key": "ZONE_SOUTH_CREST", "label": "📍 SOUTH CREST RAMP", "x": -25, "y": -195, "z": 240},
+        {"key": "ZONE_RAMP_3", "label": "📍 MAIN HAULAGE RAMP 3", "x": 175, "y": 0, "z": 200},
+        {"key": "ZONE_HAUL_ROAD", "label": "📍 WEST PIT ACCESS ROAD", "x": -175, "y": 0, "z": 200},
     ]
 
     pin_colors = {
@@ -447,6 +464,204 @@ def build_3d_pit_figure(X, Y, Z, sector_id_map, sector_telemetries, selected_sec
                 center=dict(x=0, y=0, z=-0.1)
             ),
         ),
+        height=520,
+    )
+    return fig
+
+
+def build_geotech_cross_section_figure(selected_sector_name: str, hazard_mode: str, cur_sec: dict):
+    """
+    Renders 2D engineered geotechnical cross-section showing highwall slope profile,
+    tension crack depth, Bishop circular failure slip arc, water table, and Factor of Safety (FoS).
+    """
+    fig = go.Figure()
+
+    # Highwall profile steps
+    x_prof = [0, 45, 45, 75, 75, 105, 105, 135, 135, 165, 165, 230]
+    z_prof = [320, 320, 296, 296, 272, 272, 248, 248, 224, 224, 200, 200]
+    fig.add_trace(go.Scatter(
+        x=x_prof, y=z_prof,
+        mode="lines",
+        name="Highwall Face & Catch Berms",
+        line=dict(color="#94a3b8", width=3),
+        fill="tozeroy",
+        fillcolor="rgba(30, 41, 59, 0.35)",
+    ))
+
+    # Tension crack at crest
+    crack_depth = cur_sec.get("crack_cm", 0.0) / 10.0  # scaled to meters
+    if crack_depth > 0.1:
+        crack_x = 42
+        fig.add_trace(go.Scatter(
+            x=[crack_x, crack_x], y=[320, 320 - crack_depth],
+            mode="lines+markers",
+            name=f"Tension Crack ({cur_sec.get('crack_cm'):.1f} cm)",
+            line=dict(color="#ef4444", width=4),
+            marker=dict(size=6, color="#ef4444"),
+        ))
+
+    # Phreatic water surface line
+    fig.add_trace(go.Scatter(
+        x=[0, 165], y=[295, 215],
+        mode="lines",
+        name="Phreatic Water Table",
+        line=dict(color="#38bdf8", dash="dash", width=2),
+    ))
+
+    # Bishop Critical Failure Slip Arc
+    theta = np.linspace(0.85, 2.15, 50)
+    r_arc = 125.0
+    xc, zc = 125.0, 325.0
+    x_arc = xc - r_arc * np.cos(theta)
+    z_arc = zc - r_arc * np.sin(theta)
+
+    arc_colors = {"NORMAL": "#10b981", "MILD": "#f59e0b", "MODERATE": "#f97316", "SEVERE": "#ef4444"}
+    fos_values = {"NORMAL": 1.62, "MILD": 1.34, "MODERATE": 1.08, "SEVERE": 0.86}
+    cur_fos = fos_values.get(hazard_mode, 1.62)
+
+    fig.add_trace(go.Scatter(
+        x=x_arc, y=z_arc,
+        mode="lines",
+        name=f"Critical Slip Surface (FoS: {cur_fos:.2f})",
+        line=dict(color=arc_colors.get(hazard_mode, "#10b981"), width=3.5, dash="dot"),
+    ))
+
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(15, 23, 42, 0.7)",
+        title=dict(
+            text=f"📐 Geotechnical Limit-Equilibrium Cross-Section: {selected_sector_name} (FoS = {cur_fos:.2f})",
+            font=dict(color="#f1f5f9", size=13),
+        ),
+        xaxis=dict(title="Section Distance (m)", gridcolor="#1e293b", color="#94a3b8"),
+        yaxis=dict(title="Elevation (m RL)", gridcolor="#1e293b", color="#94a3b8", range=[180, 340]),
+        legend=dict(font=dict(color="#cbd5e1", size=10), orientation="h", y=1.12),
+        margin=dict(l=40, r=20, b=40, t=50),
+        height=520,
+    )
+    return fig
+
+
+def build_saito_forecast_figure(hazard_mode: str, cur_vel: float):
+    """
+    Renders Saito's tertiary creep inverse velocity (1/v) time-of-failure forecast.
+    """
+    t = np.linspace(0, 12, 50)
+    tf = 14.5 if hazard_mode in ("MILD", "MODERATE") else (12.4 if hazard_mode == "SEVERE" else 30.0)
+    v0 = 0.8
+    A = 3.5 if hazard_mode != "NORMAL" else 0.2
+    v = v0 + A / np.maximum(0.1, (tf - t))**1.1
+    inv_v = 1.0 / np.maximum(0.01, v)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=t, y=v,
+        mode="lines",
+        name="Radar Creep Velocity v(t) [mm/h]",
+        line=dict(color="#f97316", width=2.5),
+    ))
+    fig.add_trace(go.Scatter(
+        x=t, y=inv_v,
+        mode="lines+markers",
+        name="Inverse Velocity 1/v [h/mm]",
+        yaxis="y2",
+        line=dict(color="#38bdf8", width=2),
+        marker=dict(size=4),
+    ))
+
+    # Countdown to failure
+    time_to_fail = max(0.0, tf - 12.0)
+    fail_label = f"Estimated Detachment in {time_to_fail:.1f} hours" if hazard_mode in ("MILD", "MODERATE") else ("IMMINENT DETACHMENT / COLLAPSE UNDERWAY" if hazard_mode == "SEVERE" else "Slope Stable — Normal Creep")
+
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(15, 23, 42, 0.7)",
+        title=dict(
+            text=f"📈 Saito Inverse Velocity (1/v) Creep Law: {fail_label}",
+            font=dict(color="#f1f5f9", size=13),
+        ),
+        xaxis=dict(title="Time (hours)", gridcolor="#1e293b", color="#94a3b8"),
+        yaxis=dict(title="Velocity v (mm/h)", gridcolor="#1e293b", color="#f97316"),
+        yaxis2=dict(title="Inverse Velocity 1/v (h/mm)", overlaying="y", side="right", color="#38bdf8"),
+        legend=dict(font=dict(color="#cbd5e1", size=10), orientation="h", y=1.12),
+        margin=dict(l=40, r=40, b=40, t=50),
+        height=520,
+    )
+    return fig
+
+
+def build_sensor_topology_figure(sim_telemetries: dict):
+    """
+    Renders 2D plan-view sensor network topology showing Slope Stability Radar scanner,
+    piezometers, inclinometers, and robotic prism total stations.
+    """
+    fig = go.Figure()
+
+    # Pit contour rings
+    for r in [280, 220, 160, 100, 50]:
+        theta = np.linspace(0, 2 * np.pi, 60)
+        fig.add_trace(go.Scatter(
+            x=r * 1.2 * np.cos(theta),
+            y=r * 0.9 * np.sin(theta),
+            mode="lines",
+            line=dict(color="#334155", width=1, dash="dot"),
+            showlegend=False,
+            hoverinfo="none",
+        ))
+
+    # Radar scanner location (SSR-02 on south-east ridge)
+    fig.add_trace(go.Scatter(
+        x=[240], y=[-260],
+        mode="markers+text",
+        name="SSR-02 Ground Radar",
+        text=["📡 SSR-02 RADAR (Scanning 360°)"],
+        textposition="bottom right",
+        textfont=dict(color="#38bdf8", size=11, family="monospace"),
+        marker=dict(size=14, color="#38bdf8", symbol="star"),
+    ))
+
+    # Radar scan fan lines
+    for angle in [75, 105, 135, 165]:
+        rad = np.radians(angle)
+        fig.add_trace(go.Scatter(
+            x=[240, 240 - 450 * np.cos(rad)],
+            y=[-260, -260 + 450 * np.sin(rad)],
+            mode="lines",
+            line=dict(color="rgba(56, 189, 248, 0.18)", width=1),
+            showlegend=False,
+            hoverinfo="none",
+        ))
+
+    # Monitoring prisms and piezometers
+    sensors = [
+        {"type": "VWP Piezometer", "x": 0, "y": 190, "code": "PZ-01 (42 kPa)", "color": "#10b981"},
+        {"type": "VWP Piezometer", "x": 160, "y": 20, "code": "PZ-02 (26 kPa)", "color": "#10b981"},
+        {"type": "Inclinometer", "x": 20, "y": 140, "code": "IPI-01 (Shear: 3.2mm)", "color": "#f59e0b"},
+        {"type": "Robotic Prism", "x": -150, "y": 40, "code": "PRISM-04 (1.2mm)", "color": "#a855f7"},
+        {"type": "Robotic Prism", "x": 0, "y": -160, "code": "PRISM-07 (0.8mm)", "color": "#a855f7"},
+    ]
+    for s in sensors:
+        fig.add_trace(go.Scatter(
+            x=[s["x"]], y=[s["y"]],
+            mode="markers+text",
+            name=s["type"],
+            text=[s["code"]],
+            textposition="top center",
+            textfont=dict(color="#f8fafc", size=9, family="monospace"),
+            marker=dict(size=9, color=s["color"], symbol="triangle-up"),
+            showlegend=False,
+        ))
+
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(15, 23, 42, 0.7)",
+        title=dict(
+            text="📡 Multi-Sensor Network Topology & GroundProbe SSR Line-of-Sight Coverage",
+            font=dict(color="#f1f5f9", size=13),
+        ),
+        xaxis=dict(title="Easting (m)", gridcolor="#1e293b", color="#94a3b8"),
+        yaxis=dict(title="Northing (m)", gridcolor="#1e293b", color="#94a3b8"),
+        margin=dict(l=40, r=40, b=40, t=50),
         height=520,
     )
     return fig
@@ -539,6 +754,33 @@ SECTOR_NORMAL_VIDEOS = {
     "ZONE_SOUTH_CREST": "data/videos/cam02_south_crest_normal.mp4",
     "ZONE_RAMP_3": "data/videos/cam03_ramp3_normal.mp4",
     "ZONE_HAUL_ROAD": "data/videos/cam04_haul_road_normal.mp4",
+}
+
+# Real-world authentic mine footage and actual geological rockfall/landslide video streams
+REAL_WORLD_PRESETS = {
+    "NORMAL": {
+        "video": "data/videos/real_normal_pit_ops.mp4",
+        "desc": "Real-world open-pit quarry and active highwall operations. Heavy haul equipment, nominal creep.",
+    },
+    "MILD": {
+        "video": "data/videos/real_mild_ravelling.mp4",
+        "desc": "Real-world mountain slope tension scarp opening and initial surface ravelling.",
+    },
+    "MODERATE": {
+        "video": "data/videos/real_moderate_slabbing.mp4",
+        "desc": "Real-world quarry highwall bench detachment, rock fracturing, and sliding slabs.",
+    },
+    "SEVERE": {
+        "video": "data/videos/real_severe_collapse.mp4",
+        "desc": "Real-world catastrophic mountain slope collapse and massive debris avalanche in Full HD 1080p.",
+    },
+}
+
+SECTOR_REAL_VIDEOS = {
+    "ZONE_NORTH_WALL": "data/videos/real_normal_pit_ops.mp4",
+    "ZONE_SOUTH_CREST": "data/videos/real_openpit_haulage.mp4",
+    "ZONE_RAMP_3": "data/videos/real_normal_quarry.mp4",
+    "ZONE_HAUL_ROAD": "data/videos/real_openpit_haulage.mp4",
 }
 
 SECTOR_CAMS = {
@@ -661,12 +903,33 @@ col_left, col_right = st.columns([1.5, 1.0], gap="medium")
 
 # --- LEFT COLUMN: 3D DIGITAL TWIN & REAL-TIME CONTROLS ---
 with col_left:
-    st.markdown('<div class="card-title">🌐 3D Open-Pit Digital Twin & Real-Time Deformation Heatmap</div>', unsafe_allow_html=True)
-    
-    # 3D Pit Topography Mesh
-    X_grid, Y_grid, Z_grid, s_map = generate_realistic_pit_topography()
-    fig_3d = build_3d_pit_figure(X_grid, Y_grid, Z_grid, s_map, sim_telemetries, selected_sector_key)
-    st.plotly_chart(fig_3d, width="stretch", config={"displayModeBar": False})
+    st.markdown('<div class="card-title">🌐 Geotechnical Mine Engineering Visualization Suite</div>', unsafe_allow_html=True)
+
+    geotech_view = st.radio(
+        "Active Spatial & Engineering View:",
+        options=[
+            "🌐 3D Multi-Lobed Open-Pit Digital Twin",
+            "📐 2D Highwall Cross-Section & Failure Arc (FoS)",
+            "📈 Saito Creep Inverse Velocity Forecast (1/v)",
+            "📡 Sensor Network Topology & Ground Radar",
+        ],
+        horizontal=True,
+        key="geotech_spatial_view",
+    )
+
+    if geotech_view == "🌐 3D Multi-Lobed Open-Pit Digital Twin":
+        X_grid, Y_grid, Z_grid, s_map = generate_realistic_pit_topography()
+        fig_3d = build_3d_pit_figure(X_grid, Y_grid, Z_grid, s_map, sim_telemetries, selected_sector_key)
+        st.plotly_chart(fig_3d, width="stretch", config={"displayModeBar": False})
+    elif geotech_view == "📐 2D Highwall Cross-Section & Failure Arc (FoS)":
+        fig_sec = build_geotech_cross_section_figure(cur_sec['name'], selected_mode, cur_sec)
+        st.plotly_chart(fig_sec, width="stretch", config={"displayModeBar": False})
+    elif geotech_view == "📈 Saito Creep Inverse Velocity Forecast (1/v)":
+        fig_saito = build_saito_forecast_figure(selected_mode, cur_sec['radar_velocity_mm_hr'])
+        st.plotly_chart(fig_saito, width="stretch", config={"displayModeBar": False})
+    else:
+        fig_topo = build_sensor_topology_figure(sim_telemetries)
+        st.plotly_chart(fig_topo, width="stretch", config={"displayModeBar": False})
 
     # Sector Selector Radio Pills
     sec_names = {k: v["name"] for k, v in sim_telemetries.items()}
@@ -680,7 +943,7 @@ with col_left:
 
     # --- USER-REQUESTED HAZARD SEVERITY SCENARIO SELECTOR ---
     st.markdown('<div class="card-title" style="margin-top: 14px;">🎛️ Live Hazard Scenario Progression ("All Together" in Lockstep)</div>', unsafe_allow_html=True)
-    
+
     # Selection of Mild, Moderate, Severe, or Normal
     mode_options = list(HAZARD_PRESETS.keys())
     selected_mode = st.radio(
@@ -715,6 +978,14 @@ with col_right:
     # 1. REAL CCTV SURVEILLANCE & AI DETECTION TABS
     st.markdown('<div class="card-title">🎥 Video Surveillance Feeds & Rockfall Detachment AI</div>', unsafe_allow_html=True)
 
+    # Footage Source Selector: Real-World vs Synthetic AI Overlays
+    footage_source = st.radio(
+        "Surveillance Video Source:",
+        options=["🎥 Real-Life World Footage (Actual Mines & Landslides)", "🤖 Computer Vision AI Tracking Overlay Stream"],
+        horizontal=True,
+        key="footage_source_mode",
+    )
+
     tab_focused, tab_upload, tab_matrix = st.tabs([
         "📹 Monitored CCTV",
         "📤 Video Uploader & AI",
@@ -722,16 +993,23 @@ with col_right:
     ])
 
     with tab_focused:
-        # Determine appropriate video path based on sector and scenario
-        if selected_mode == "NORMAL":
-            video_path = SECTOR_NORMAL_VIDEOS.get(chosen_sector, "data/videos/cam01_north_wall_normal.mp4")
+        if footage_source == "🎥 Real-Life World Footage (Actual Mines & Landslides)":
+            if selected_mode == "NORMAL":
+                video_path = SECTOR_REAL_VIDEOS.get(chosen_sector, "data/videos/real_normal_pit_ops.mp4")
+            else:
+                video_path = REAL_WORLD_PRESETS[selected_mode]["video"]
+            footage_desc = REAL_WORLD_PRESETS[selected_mode]["desc"]
         else:
-            video_path = HAZARD_PRESETS[selected_mode]["video"]
+            if selected_mode == "NORMAL":
+                video_path = SECTOR_NORMAL_VIDEOS.get(chosen_sector, "data/videos/cam01_north_wall_normal.mp4")
+            else:
+                video_path = HAZARD_PRESETS[selected_mode]["video"]
+            footage_desc = HAZARD_PRESETS[selected_mode]["desc"]
 
         if os.path.exists(video_path):
-            st.video(video_path, autoplay=True, loop=True)
+            st.video(video_path, autoplay=True, loop=True, key=f"vid_focused_{chosen_sector}_{selected_mode}_{footage_source[:4]}")
         else:
-            st.info("Generating surveillance feed...")
+            st.info("Surveillance feed initializing...")
 
         # Visual Detection Details Card
         det_stats = {
@@ -744,8 +1022,11 @@ with col_right:
 
         st.markdown(f"""
         <div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: 8px; padding: 10px 14px; margin-top: 8px;">
-            <div style="font-size: 0.82rem; font-weight: 700; color: #f1f5f9; margin-bottom: 6px;">
+            <div style="font-size: 0.82rem; font-weight: 700; color: #f1f5f9; margin-bottom: 4px;">
                 {active_stat['banner']}
+            </div>
+            <div style="font-size: 0.78rem; color: #94a3b8; margin-bottom: 6px;">
+                <strong>Footage Description:</strong> {footage_desc}
             </div>
             <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; font-size: 0.75rem; color: #cbd5e1; font-family: monospace;">
                 <div>FRAGMENTS: <span style="color:#38bdf8; font-weight:bold;">{active_stat['frags']}</span></div>
@@ -760,7 +1041,7 @@ with col_right:
         """, unsafe_allow_html=True)
 
     with tab_upload:
-        st.markdown('<div style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 6px;">Upload your own open-pit drone or CCTV video to run live computer vision rockfall detection:</div>', unsafe_allow_html=True)
+        st.markdown('<div style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 6px;">Upload real-world open-pit drone or CCTV video to run live computer vision rockfall detection:</div>', unsafe_allow_html=True)
         uploaded_file = st.file_uploader(
             "Upload Pit Drone / CCTV Video (.mp4, .mov, .avi):",
             type=["mp4", "mov", "avi", "m4v"],
@@ -769,8 +1050,15 @@ with col_right:
         )
 
         sample_choice = st.selectbox(
-            "Or test AI analysis on a preloaded scenario clip:",
-            options=["None", "Test 1: Mild Rockfall & Pebble Ravelling", "Test 2: Moderate Rock Slab Detachment", "Test 3: Severe Boulder Cascade Collapse", "Test 4: Normal Stable Highwall"],
+            "Or test AI analysis on a preloaded real-world mine clip:",
+            options=[
+                "None",
+                "Real Clip 1: Catastrophic Landslide & Slope Collapse (Full HD)",
+                "Real Clip 2: Quarry Highwall Bench Detachment & Slabbing",
+                "Real Clip 3: Mountain Slope Scarp & Initial Surface Ravelling",
+                "Real Clip 4: Active Open-Pit Mining Benches & Equipment",
+                "Real Clip 5: Garzweiler Surface Mine Heavy Haulage",
+            ],
             key="sample_video_choice"
         )
 
@@ -780,17 +1068,19 @@ with col_right:
             with open(save_path, "wb") as f_out:
                 f_out.write(uploaded_file.getbuffer())
             video_to_analyze = save_path
-        elif sample_choice == "Test 1: Mild Rockfall & Pebble Ravelling":
-            video_to_analyze = "data/videos/mild_rockfall.mp4"
-        elif sample_choice == "Test 2: Moderate Rock Slab Detachment":
-            video_to_analyze = "data/videos/moderate_rockfall.mp4"
-        elif sample_choice == "Test 3: Severe Boulder Cascade Collapse":
-            video_to_analyze = "data/videos/severe_rockfall.mp4"
-        elif sample_choice == "Test 4: Normal Stable Highwall":
-            video_to_analyze = "data/videos/cam01_north_wall_normal.mp4"
+        elif sample_choice == "Real Clip 1: Catastrophic Landslide & Slope Collapse (Full HD)":
+            video_to_analyze = "data/videos/real_severe_collapse.mp4"
+        elif sample_choice == "Real Clip 2: Quarry Highwall Bench Detachment & Slabbing":
+            video_to_analyze = "data/videos/real_moderate_slabbing.mp4"
+        elif sample_choice == "Real Clip 3: Mountain Slope Scarp & Initial Surface Ravelling":
+            video_to_analyze = "data/videos/real_mild_ravelling.mp4"
+        elif sample_choice == "Real Clip 4: Active Open-Pit Mining Benches & Equipment":
+            video_to_analyze = "data/videos/real_normal_pit_ops.mp4"
+        elif sample_choice == "Real Clip 5: Garzweiler Surface Mine Heavy Haulage":
+            video_to_analyze = "data/videos/real_openpit_haulage.mp4"
 
         if video_to_analyze and os.path.exists(video_to_analyze):
-            st.video(video_to_analyze, autoplay=True, loop=True)
+            st.video(video_to_analyze, autoplay=True, loop=True, key=f"vid_upload_player_{hash(video_to_analyze) % 10000}")
             with st.spinner("Executing Optical Flow & Volumetric Rockfall Analysis..."):
                 analysis_res = analyze_uploaded_video(video_to_analyze)
 
@@ -818,24 +1108,24 @@ with col_right:
                 st.image(analysis_res["annotated_frame_path"], caption="Keyframe Optical Motion AI Bounding Box Overlay", width="stretch")
 
     with tab_matrix:
-        st.caption("Live Simultaneous Surveillance Matrix across all 4 Pit Fronts:")
+        st.caption("Live Simultaneous Surveillance Matrix across all 4 Pit Fronts (Real-World Feeds):")
         mat_c1, mat_c2 = st.columns(2)
         with mat_c1:
             st.markdown(f"**CAM-01:** North Highwall ({sim_telemetries['ZONE_NORTH_WALL']['effective_level']})")
-            v1 = "data/videos/cam01_north_wall_normal.mp4" if sim_telemetries['ZONE_NORTH_WALL']['effective_level'] == "GREEN" else HAZARD_PRESETS[selected_mode]["video"]
-            st.video(v1, autoplay=True, loop=True)
+            v1 = "data/videos/real_normal_pit_ops.mp4" if sim_telemetries['ZONE_NORTH_WALL']['effective_level'] == "GREEN" else REAL_WORLD_PRESETS[selected_mode]["video"]
+            st.video(v1, autoplay=True, loop=True, key=f"mat_v1_{chosen_sector}_{selected_mode}")
 
             st.markdown(f"**CAM-02:** South Crest ({sim_telemetries['ZONE_SOUTH_CREST']['effective_level']})")
-            v2 = "data/videos/cam02_south_crest_normal.mp4" if sim_telemetries['ZONE_SOUTH_CREST']['effective_level'] == "GREEN" else HAZARD_PRESETS[selected_mode]["video"]
-            st.video(v2, autoplay=True, loop=True)
+            v2 = "data/videos/real_openpit_haulage.mp4" if sim_telemetries['ZONE_SOUTH_CREST']['effective_level'] == "GREEN" else REAL_WORLD_PRESETS[selected_mode]["video"]
+            st.video(v2, autoplay=True, loop=True, key=f"mat_v2_{chosen_sector}_{selected_mode}")
         with mat_c2:
             st.markdown(f"**CAM-03:** Ramp 3 Switchback ({sim_telemetries['ZONE_RAMP_3']['effective_level']})")
-            v3 = "data/videos/cam03_ramp3_normal.mp4" if sim_telemetries['ZONE_RAMP_3']['effective_level'] == "GREEN" else HAZARD_PRESETS[selected_mode]["video"]
-            st.video(v3, autoplay=True, loop=True)
+            v3 = "data/videos/real_normal_quarry.mp4" if sim_telemetries['ZONE_RAMP_3']['effective_level'] == "GREEN" else REAL_WORLD_PRESETS[selected_mode]["video"]
+            st.video(v3, autoplay=True, loop=True, key=f"mat_v3_{chosen_sector}_{selected_mode}")
 
             st.markdown(f"**CAM-04:** West Pit Haul Road ({sim_telemetries['ZONE_HAUL_ROAD']['effective_level']})")
-            v4 = "data/videos/cam04_haul_road_normal.mp4" if sim_telemetries['ZONE_HAUL_ROAD']['effective_level'] == "GREEN" else HAZARD_PRESETS[selected_mode]["video"]
-            st.video(v4, autoplay=True, loop=True)
+            v4 = "data/videos/real_openpit_haulage.mp4" if sim_telemetries['ZONE_HAUL_ROAD']['effective_level'] == "GREEN" else REAL_WORLD_PRESETS[selected_mode]["video"]
+            st.video(v4, autoplay=True, loop=True, key=f"mat_v4_{chosen_sector}_{selected_mode}")
 
     # 2. MULTIMODAL SENSOR TELEMETRY METRIC BOXES
     st.markdown('<div class="card-title" style="margin-top: 10px;">📊 Multimodal Telemetry Streams</div>', unsafe_allow_html=True)

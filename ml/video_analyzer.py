@@ -81,6 +81,9 @@ def analyze_uploaded_video(video_path: str) -> Dict[str, Any]:
         # Mask out HUD
         diff_mag[:hud_top, :] = 0.0
         diff_mag[hud_bot:, :] = 0.0
+        # Global camera motion/jitter compensation
+        bg_jitter = np.median(diff_mag[hud_top:hud_bot, :])
+        diff_mag = np.maximum(0.0, diff_mag - bg_jitter * 1.4)
         diffs.append(diff_mag)
 
     max_diff_overall = max([np.max(d) for d in diffs]) if diffs else 0.0
