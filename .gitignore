@@ -30,3 +30,7 @@ ENV/
 .idea/
 .vscode/
 *.swp
+data/videos/tmp_frames/
+data/videos/uploads/extracted_frames/
+data/videos/uploads/*
+!data/videos/uploads/.gitkeep

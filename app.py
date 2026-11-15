@@ -27,6 +27,7 @@ from blackboard import MineBlackboard
 from controller import RockWatchController
 from tools.rag_tools import retrieve_sop
 from tools.simulation_engine import GeotechnicalSimulationEngine
+from ml.video_analyzer import analyze_uploaded_video
 
 # --- PAGE CONFIGURATION (Full Width, Dark Base) ---
 st.set_page_config(
@@ -486,7 +487,7 @@ HAZARD_PRESETS = {
     "NORMAL": {
         "name": "🟢 1. Normal Operations (Stable Highwall)",
         "desc": "Baseline mining operations. Benches stable, background radar creep (0.7 mm/hr), Level 1 Green.",
-        "video": "data/videos/normal_ops.mp4",
+        "video": "data/videos/cam01_north_wall_normal.mp4",
         "vel": 0.75,
         "rain": 1.2,
         "pore": 24.0,
@@ -531,6 +532,20 @@ HAZARD_PRESETS = {
         "status": "RED",
         "directive": "CRITICAL EMERGENCY: Mandatory immediate pit evacuation of all personnel and machinery.",
     },
+}
+
+SECTOR_NORMAL_VIDEOS = {
+    "ZONE_NORTH_WALL": "data/videos/cam01_north_wall_normal.mp4",
+    "ZONE_SOUTH_CREST": "data/videos/cam02_south_crest_normal.mp4",
+    "ZONE_RAMP_3": "data/videos/cam03_ramp3_normal.mp4",
+    "ZONE_HAUL_ROAD": "data/videos/cam04_haul_road_normal.mp4",
+}
+
+SECTOR_CAMS = {
+    "ZONE_NORTH_WALL": "CAM-01 [North Highwall Bench 4]",
+    "ZONE_SOUTH_CREST": "CAM-02 [South Crest Overburden]",
+    "ZONE_RAMP_3": "CAM-03 [Main Haulage Switchback Ramp 3]",
+    "ZONE_HAUL_ROAD": "CAM-04 [West Pit Access Haul Road]",
 }
 
 
@@ -697,13 +712,130 @@ with col_right:
     </div>
     """, unsafe_allow_html=True)
 
-    # 1. REAL CCTV SURVEILLANCE MP4 VIDEO (BUILT-IN FOR ALL SECTORS)
-    st.markdown('<div class="card-title">🎥 Live Sector Surveillance CCTV (Real-Life Video & AI Detection)</div>', unsafe_allow_html=True)
-    video_path = HAZARD_PRESETS[selected_mode]["video"]
-    if os.path.exists(video_path):
-        st.video(video_path, autoplay=True, loop=True)
-    else:
-        st.info("Generating surveillance feed...")
+    # 1. REAL CCTV SURVEILLANCE & AI DETECTION TABS
+    st.markdown('<div class="card-title">🎥 Video Surveillance Feeds & Rockfall Detachment AI</div>', unsafe_allow_html=True)
+
+    tab_focused, tab_upload, tab_matrix = st.tabs([
+        "📹 Monitored CCTV",
+        "📤 Video Uploader & AI",
+        "🎛️ 4-Camera Matrix",
+    ])
+
+    with tab_focused:
+        # Determine appropriate video path based on sector and scenario
+        if selected_mode == "NORMAL":
+            video_path = SECTOR_NORMAL_VIDEOS.get(chosen_sector, "data/videos/cam01_north_wall_normal.mp4")
+        else:
+            video_path = HAZARD_PRESETS[selected_mode]["video"]
+
+        if os.path.exists(video_path):
+            st.video(video_path, autoplay=True, loop=True)
+        else:
+            st.info("Generating surveillance feed...")
+
+        # Visual Detection Details Card
+        det_stats = {
+            "NORMAL": {"frags": 0, "opt_v": 0.35, "vol": 0.0, "conf": 95, "banner": "🟢 STABLE HIGHWALL | Normal Baseline Creep | No Detachments", "alert": "TARP LEVEL 1 GREEN (Normal Operations)"},
+            "MILD": {"frags": 4, "opt_v": 1.92, "vol": 0.3, "conf": 89, "banner": "🟡 TENSION CRACK OPENING + LOOSE GRAVEL RAVELLING DETECTED", "alert": "TARP LEVEL 2 YELLOW CAUTION (Foot Traffic Restricted)"},
+            "MODERATE": {"frags": 12, "opt_v": 4.41, "vol": 3.4, "conf": 94, "banner": "🟠 SCARP FISSURE EXTENSION + SLAB DETACHMENT DETECTED", "alert": "TARP LEVEL 3 ORANGE WARNING (Stand Down Haul Ramp)"},
+            "SEVERE": {"frags": 44, "opt_v": 10.55, "vol": 28.6, "conf": 99, "banner": "🔴 MASSIVE BOULDER CASCADE COLLAPSE DETECTED", "alert": "TARP LEVEL 4 RED EMERGENCY (Mandatory Pit Evacuation)"},
+        }
+        active_stat = det_stats[selected_mode]
+
+        st.markdown(f"""
+        <div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: 8px; padding: 10px 14px; margin-top: 8px;">
+            <div style="font-size: 0.82rem; font-weight: 700; color: #f1f5f9; margin-bottom: 6px;">
+                {active_stat['banner']}
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; font-size: 0.75rem; color: #cbd5e1; font-family: monospace;">
+                <div>FRAGMENTS: <span style="color:#38bdf8; font-weight:bold;">{active_stat['frags']}</span></div>
+                <div>OPTICAL VEL: <span style="color:#38bdf8; font-weight:bold;">{active_stat['opt_v']} m/s</span></div>
+                <div>VOL LOSS: <span style="color:#38bdf8; font-weight:bold;">{active_stat['vol']} m³</span></div>
+                <div>AI CONF: <span style="color:#34d399; font-weight:bold;">{active_stat['conf']}%</span></div>
+            </div>
+            <div style="margin-top: 6px; font-size: 0.78rem; color: #f59e0b;">
+                ⚡ <strong>ALERT GENERATED:</strong> {active_stat['alert']}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with tab_upload:
+        st.markdown('<div style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 6px;">Upload your own open-pit drone or CCTV video to run live computer vision rockfall detection:</div>', unsafe_allow_html=True)
+        uploaded_file = st.file_uploader(
+            "Upload Pit Drone / CCTV Video (.mp4, .mov, .avi):",
+            type=["mp4", "mov", "avi", "m4v"],
+            key="custom_pit_video_uploader",
+            label_visibility="collapsed"
+        )
+
+        sample_choice = st.selectbox(
+            "Or test AI analysis on a preloaded scenario clip:",
+            options=["None", "Test 1: Mild Rockfall & Pebble Ravelling", "Test 2: Moderate Rock Slab Detachment", "Test 3: Severe Boulder Cascade Collapse", "Test 4: Normal Stable Highwall"],
+            key="sample_video_choice"
+        )
+
+        video_to_analyze = None
+        if uploaded_file is not None:
+            save_path = os.path.join("data/videos/uploads", uploaded_file.name)
+            with open(save_path, "wb") as f_out:
+                f_out.write(uploaded_file.getbuffer())
+            video_to_analyze = save_path
+        elif sample_choice == "Test 1: Mild Rockfall & Pebble Ravelling":
+            video_to_analyze = "data/videos/mild_rockfall.mp4"
+        elif sample_choice == "Test 2: Moderate Rock Slab Detachment":
+            video_to_analyze = "data/videos/moderate_rockfall.mp4"
+        elif sample_choice == "Test 3: Severe Boulder Cascade Collapse":
+            video_to_analyze = "data/videos/severe_rockfall.mp4"
+        elif sample_choice == "Test 4: Normal Stable Highwall":
+            video_to_analyze = "data/videos/cam01_north_wall_normal.mp4"
+
+        if video_to_analyze and os.path.exists(video_to_analyze):
+            st.video(video_to_analyze, autoplay=True, loop=True)
+            with st.spinner("Executing Optical Flow & Volumetric Rockfall Analysis..."):
+                analysis_res = analyze_uploaded_video(video_to_analyze)
+
+            tier = analysis_res["detected_hazard_tier"]
+            tier_badge = badge_classes.get(tier if tier != "NORMAL" else "GREEN", "badge-green")
+            st.markdown(f"""
+            <div style="background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(59, 130, 246, 0.35); border-radius: 8px; padding: 12px; margin-top: 8px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="font-weight: 800; font-size: 0.95rem; color: #f1f5f9;">VIDEO AI DETECTOR OUTPUT</span>
+                    <span class="{tier_badge}">TARP {analysis_res['tarp_level']}</span>
+                </div>
+                <div style="font-size: 0.82rem; color: #cbd5e1; margin-bottom: 8px;">
+                    <strong>Alert:</strong> {analysis_res['alert_message']}
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; font-size: 0.75rem; color: #cbd5e1; font-family: monospace;">
+                    <div>FRAGMENTS: <span style="color:#38bdf8;">{analysis_res['fragment_count']}</span></div>
+                    <div>MAX VEL: <span style="color:#38bdf8;">{analysis_res['max_velocity_ms']} m/s</span></div>
+                    <div>VOLUME: <span style="color:#38bdf8;">{analysis_res['volume_m3']} m³</span></div>
+                    <div>CONFIDENCE: <span style="color:#34d399;">{int(analysis_res['confidence']*100)}%</span></div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            if analysis_res.get("annotated_frame_path") and os.path.exists(analysis_res["annotated_frame_path"]):
+                st.image(analysis_res["annotated_frame_path"], caption="Keyframe Optical Motion AI Bounding Box Overlay", width="stretch")
+
+    with tab_matrix:
+        st.caption("Live Simultaneous Surveillance Matrix across all 4 Pit Fronts:")
+        mat_c1, mat_c2 = st.columns(2)
+        with mat_c1:
+            st.markdown(f"**CAM-01:** North Highwall ({sim_telemetries['ZONE_NORTH_WALL']['effective_level']})")
+            v1 = "data/videos/cam01_north_wall_normal.mp4" if sim_telemetries['ZONE_NORTH_WALL']['effective_level'] == "GREEN" else HAZARD_PRESETS[selected_mode]["video"]
+            st.video(v1, autoplay=True, loop=True)
+
+            st.markdown(f"**CAM-02:** South Crest ({sim_telemetries['ZONE_SOUTH_CREST']['effective_level']})")
+            v2 = "data/videos/cam02_south_crest_normal.mp4" if sim_telemetries['ZONE_SOUTH_CREST']['effective_level'] == "GREEN" else HAZARD_PRESETS[selected_mode]["video"]
+            st.video(v2, autoplay=True, loop=True)
+        with mat_c2:
+            st.markdown(f"**CAM-03:** Ramp 3 Switchback ({sim_telemetries['ZONE_RAMP_3']['effective_level']})")
+            v3 = "data/videos/cam03_ramp3_normal.mp4" if sim_telemetries['ZONE_RAMP_3']['effective_level'] == "GREEN" else HAZARD_PRESETS[selected_mode]["video"]
+            st.video(v3, autoplay=True, loop=True)
+
+            st.markdown(f"**CAM-04:** West Pit Haul Road ({sim_telemetries['ZONE_HAUL_ROAD']['effective_level']})")
+            v4 = "data/videos/cam04_haul_road_normal.mp4" if sim_telemetries['ZONE_HAUL_ROAD']['effective_level'] == "GREEN" else HAZARD_PRESETS[selected_mode]["video"]
+            st.video(v4, autoplay=True, loop=True)
 
     # 2. MULTIMODAL SENSOR TELEMETRY METRIC BOXES
     st.markdown('<div class="card-title" style="margin-top: 10px;">📊 Multimodal Telemetry Streams</div>', unsafe_allow_html=True)
@@ -892,4 +1024,4 @@ with b_c2:
                 "Payload Hash": e.get("payload_hash", "")[:10] + "...",
                 "Head Hash": e.get("head_hash", "")[:10] + "...",
             })
-        st.dataframe(recent_entries, use_container_width=True)
+        st.dataframe(recent_entries, width="stretch")
