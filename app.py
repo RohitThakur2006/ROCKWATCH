@@ -20,8 +20,22 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from PIL import Image
+import inspect
 
 import streamlit as st
+
+def safe_render_video(data, key=None, **kwargs):
+    """
+    Renders st.video with unique key/alt parameters compatible with all Streamlit versions (Python 3.13, 3.14).
+    Prevents StreamlitDuplicateElementId while remaining robust across varying parameter signatures.
+    """
+    sig = inspect.signature(st.video)
+    call_kwargs = dict(kwargs)
+    if "key" in sig.parameters and key is not None:
+        call_kwargs["key"] = key
+    if "alt" in sig.parameters and key is not None:
+        call_kwargs["alt"] = str(key)
+    return st.video(data, **call_kwargs)
 
 from blackboard import MineBlackboard
 from controller import RockWatchController
@@ -1007,7 +1021,7 @@ with col_right:
             footage_desc = HAZARD_PRESETS[selected_mode]["desc"]
 
         if os.path.exists(video_path):
-            st.video(video_path, autoplay=True, loop=True, key=f"vid_focused_{chosen_sector}_{selected_mode}_{footage_source[:4]}")
+            safe_render_video(video_path, autoplay=True, loop=True, key=f"vid_focused_{chosen_sector}_{selected_mode}_{footage_source[:4]}")
         else:
             st.info("Surveillance feed initializing...")
 
@@ -1080,7 +1094,7 @@ with col_right:
             video_to_analyze = "data/videos/real_openpit_haulage.mp4"
 
         if video_to_analyze and os.path.exists(video_to_analyze):
-            st.video(video_to_analyze, autoplay=True, loop=True, key=f"vid_upload_player_{hash(video_to_analyze) % 10000}")
+            safe_render_video(video_to_analyze, autoplay=True, loop=True, key=f"vid_upload_player_{hash(video_to_analyze) % 10000}")
             with st.spinner("Executing Optical Flow & Volumetric Rockfall Analysis..."):
                 analysis_res = analyze_uploaded_video(video_to_analyze)
 
@@ -1113,19 +1127,19 @@ with col_right:
         with mat_c1:
             st.markdown(f"**CAM-01:** North Highwall ({sim_telemetries['ZONE_NORTH_WALL']['effective_level']})")
             v1 = "data/videos/real_normal_pit_ops.mp4" if sim_telemetries['ZONE_NORTH_WALL']['effective_level'] == "GREEN" else REAL_WORLD_PRESETS[selected_mode]["video"]
-            st.video(v1, autoplay=True, loop=True, key=f"mat_v1_{chosen_sector}_{selected_mode}")
+            safe_render_video(v1, autoplay=True, loop=True, key=f"mat_v1_{chosen_sector}_{selected_mode}")
 
             st.markdown(f"**CAM-02:** South Crest ({sim_telemetries['ZONE_SOUTH_CREST']['effective_level']})")
             v2 = "data/videos/real_openpit_haulage.mp4" if sim_telemetries['ZONE_SOUTH_CREST']['effective_level'] == "GREEN" else REAL_WORLD_PRESETS[selected_mode]["video"]
-            st.video(v2, autoplay=True, loop=True, key=f"mat_v2_{chosen_sector}_{selected_mode}")
+            safe_render_video(v2, autoplay=True, loop=True, key=f"mat_v2_{chosen_sector}_{selected_mode}")
         with mat_c2:
             st.markdown(f"**CAM-03:** Ramp 3 Switchback ({sim_telemetries['ZONE_RAMP_3']['effective_level']})")
             v3 = "data/videos/real_normal_quarry.mp4" if sim_telemetries['ZONE_RAMP_3']['effective_level'] == "GREEN" else REAL_WORLD_PRESETS[selected_mode]["video"]
-            st.video(v3, autoplay=True, loop=True, key=f"mat_v3_{chosen_sector}_{selected_mode}")
+            safe_render_video(v3, autoplay=True, loop=True, key=f"mat_v3_{chosen_sector}_{selected_mode}")
 
             st.markdown(f"**CAM-04:** West Pit Haul Road ({sim_telemetries['ZONE_HAUL_ROAD']['effective_level']})")
             v4 = "data/videos/real_openpit_haulage.mp4" if sim_telemetries['ZONE_HAUL_ROAD']['effective_level'] == "GREEN" else REAL_WORLD_PRESETS[selected_mode]["video"]
-            st.video(v4, autoplay=True, loop=True, key=f"mat_v4_{chosen_sector}_{selected_mode}")
+            safe_render_video(v4, autoplay=True, loop=True, key=f"mat_v4_{chosen_sector}_{selected_mode}")
 
     # 2. MULTIMODAL SENSOR TELEMETRY METRIC BOXES
     st.markdown('<div class="card-title" style="margin-top: 10px;">📊 Multimodal Telemetry Streams</div>', unsafe_allow_html=True)
