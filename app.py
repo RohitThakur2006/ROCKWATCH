@@ -38,6 +38,7 @@ def load_dotenv(filepath: str = ".env"):
             pass
 
 load_dotenv()
+from typing import Any, Dict, List, Optional
 import json
 import time
 import requests
@@ -354,6 +355,38 @@ def generate_clean_pit_topography(n_grid: int = 85):
 
 
 # ==============================================================================
+# CANONICAL SECTOR & HAZARD NORMALIZATION HELPERS
+# ==============================================================================
+CANONICAL_SECTORS = {
+    "ZONE_NORTH_WALL": "North Wall Bench 4",
+    "ZONE_SOUTH_CREST": "South Crest",
+    "ZONE_RAMP_3": "Ramp 3 Switchback",
+    "ZONE_HAUL_ROAD": "West Access Road",
+}
+
+def normalize_sector_key(val: Any) -> str:
+    """Safely normalizes any sector input (key, display name, legacy session label) to a canonical ZONE_* key."""
+    val_str = str(val or "").strip()
+    if val_str in CANONICAL_SECTORS:
+        return val_str
+    for k, name in CANONICAL_SECTORS.items():
+        if name in val_str or k in val_str:
+            return k
+    return "ZONE_NORTH_WALL"
+
+def normalize_hazard_mode(val: Any) -> str:
+    """Normalizes hazard mode into NORMAL, MILD, MODERATE, SEVERE."""
+    val_str = str(val or "").upper().strip()
+    if "SEVERE" in val_str or "EMERGENCY" in val_str:
+        return "SEVERE"
+    if "MODERATE" in val_str or "WARNING" in val_str:
+        return "MODERATE"
+    if "MILD" in val_str or "CAUTION" in val_str:
+        return "MILD"
+    return "NORMAL"
+
+
+# ==============================================================================
 # BUILD GORGEOUS, CLEAN 3D MINE FIGURE (NO UGLY CAD BOXES OR NUMBER TICKS)
 # ==============================================================================
 def build_clean_3d_mine_figure(
@@ -371,6 +404,9 @@ def build_clean_3d_mine_figure(
     - Clean floating 3D status pins for the 4 sectors
     - Authentic Lookout Deck vantage point
     """
+    chosen_sector = normalize_sector_key(chosen_sector)
+    hazard_mode = normalize_hazard_mode(hazard_mode)
+
     n_grid = Z.shape[0]
     fig = go.Figure()
 
@@ -384,6 +420,10 @@ def build_clean_3d_mine_figure(
     cx, cy = sector_centers.get(chosen_sector, (15.0, 175.0))
     dist_to_target = np.sqrt((X - cx)**2 + (Y - cy)**2)
     alert_intensity = np.exp(-((dist_to_target / 75.0)**2))
+
+    cur_sec_info = sim_telemetries.get(chosen_sector, sim_telemetries.get("ZONE_NORTH_WALL", {}))
+    sec_name_val = cur_sec_info.get("name", "North Wall Bench 4")
+    sec_status_val = cur_sec_info.get("effective_level", "NORMAL")
 
     # Prepare custom data for hover
     custom_data = np.empty((n_grid, n_grid, 3), dtype=object)
@@ -404,8 +444,8 @@ def build_clean_3d_mine_figure(
                 rock_type = "Pit Floor Water Sump"
 
             is_target = dist_to_target[i, j] < 80.0
-            sec_name = sim_telemetries[chosen_sector]["name"] if is_target else "Mine Perimeter"
-            status_text = sim_telemetries[chosen_sector]["effective_level"] if is_target else "NORMAL"
+            sec_name = sec_name_val if is_target else "Mine Perimeter"
+            status_text = sec_status_val if is_target else "NORMAL"
             
             custom_data[i, j, 0] = rock_type
             custom_data[i, j, 1] = f"{sec_name} ({status_text})"
@@ -580,7 +620,8 @@ DATASET_TIER_ROWS = {
     "SEVERE": 37,    # Row #37: v = 21.997 mm/h, rain = 1.01 mm, pore = 45.5 kPa, FoS = 0.720
 }
 
-active_mode = st.session_state.hazard_mode
+active_mode = normalize_hazard_mode(st.session_state.get("hazard_mode", "NORMAL"))
+st.session_state.hazard_mode = active_mode
 active_row_idx = DATASET_TIER_ROWS.get(active_mode, 0)
 
 # Pull EXACT row data from the CSVs
@@ -612,7 +653,8 @@ else:
     ds_status = "RED"
     ds_directive = "CRITICAL EMERGENCY: Mandatory immediate pit evacuation within 500m radius!"
 
-selected_sector_key = st.session_state.get("selected_sector", "ZONE_NORTH_WALL")
+selected_sector_key = normalize_sector_key(st.session_state.get("selected_sector", "ZONE_NORTH_WALL"))
+st.session_state.selected_sector = selected_sector_key
 
 # Compute sector states using real dataset rows
 sim_telemetries = {
@@ -667,15 +709,17 @@ sim_telemetries = {
 }
 
 # Run controller cycle
+target_sec_data = sim_telemetries.get(selected_sector_key, sim_telemetries["ZONE_NORTH_WALL"])
 raw_frame = {
-    "radar_velocity_mm_hr": sim_telemetries[selected_sector_key]["radar_velocity_mm_hr"],
-    "rainfall_3h_mm": sim_telemetries[selected_sector_key]["rainfall_3h_mm"],
-    "vibration_ppv_mms": sim_telemetries[selected_sector_key]["vibration_ppv_mms"],
+    "radar_velocity_mm_hr": target_sec_data["radar_velocity_mm_hr"],
+    "rainfall_3h_mm": target_sec_data["rainfall_3h_mm"],
+    "vibration_ppv_mms": target_sec_data["vibration_ppv_mms"],
     "timestamp": st.session_state.sim_time_hour * 3600.0,
 }
 cycle_res = ctrl.run_telemetry_cycle(selected_sector_key, raw_frame)
-sim_telemetries[selected_sector_key]["effective_level"] = cycle_res["effective_level"]
-sim_telemetries[selected_sector_key]["directive"] = cycle_res["final_alert_package"].get("advisory_directive", ds_directive)
+if selected_sector_key in sim_telemetries:
+    sim_telemetries[selected_sector_key]["effective_level"] = cycle_res["effective_level"]
+    sim_telemetries[selected_sector_key]["directive"] = cycle_res["final_alert_package"].get("advisory_directive", ds_directive)
 
 level_rank = {"GREEN": 1, "YELLOW": 2, "ORANGE": 3, "RED": 4}
 highest_global_level = max([s["effective_level"] for s in sim_telemetries.values()], key=lambda l: level_rank.get(l, 1))
@@ -722,13 +766,22 @@ with col_mine:
     # Top Controls: Sector & Real Dataset Scenario Selection
     top_c1, top_c2 = st.columns([1.1, 1.1])
     with top_c1:
+        sector_options = list(CANONICAL_SECTORS.keys())
+        try:
+            default_sector_idx = sector_options.index(selected_sector_key)
+        except (ValueError, IndexError):
+            default_sector_idx = 0
+
         chosen_sector = st.radio(
             "Select Pit Sector to Inspect:",
-            options=list(sim_telemetries.keys()),
-            format_func=lambda k: f"{sim_telemetries[k]['name']} ({sim_telemetries[k]['effective_level']})",
+            options=sector_options,
+            index=default_sector_idx,
+            format_func=lambda k: CANONICAL_SECTORS.get(k, k),
             horizontal=True,
             key="selected_sector",
         )
+        chosen_sector = normalize_sector_key(chosen_sector)
+
     with top_c2:
         dataset_options = {
             "NORMAL": f"🟢 Normal (Row #0: {disp_df.loc[0, 'velocity_mm_hr']:.2f} mm/h)",
@@ -736,13 +789,21 @@ with col_mine:
             "MODERATE": f"🟠 Warning (Row #9: {disp_df.loc[9, 'velocity_mm_hr']:.2f} mm/h)",
             "SEVERE": f"🔴 Emergency (Row #37: {disp_df.loc[37, 'velocity_mm_hr']:.2f} mm/h)",
         }
+        hazard_options = list(dataset_options.keys())
+        try:
+            default_hazard_idx = hazard_options.index(active_mode)
+        except (ValueError, IndexError):
+            default_hazard_idx = 0
+
         selected_mode = st.radio(
             "Load Dataset Hazard Scenario:",
-            options=list(dataset_options.keys()),
-            format_func=lambda m: dataset_options[m],
+            options=hazard_options,
+            index=default_hazard_idx,
+            format_func=lambda m: dataset_options.get(m, m),
             horizontal=True,
             key="hazard_mode",
         )
+        selected_mode = normalize_hazard_mode(selected_mode)
 
     # Perspective Buttons
     view_angle = st.radio(
@@ -753,8 +814,8 @@ with col_mine:
         label_visibility="collapsed",
     )
 
-    cur_sec = sim_telemetries[chosen_sector]
-    sec_level = cur_sec["effective_level"]
+    cur_sec = sim_telemetries.get(chosen_sector, sim_telemetries["ZONE_NORTH_WALL"])
+    sec_level = cur_sec.get("effective_level", "GREEN")
     sec_pill_class = status_classes.get(sec_level, "status-pill-green")
 
     # Generate and render the 3D model
