@@ -19,6 +19,25 @@ Simplified, intuitive, human-centered design:
 
 import os
 os.environ["LOKY_MAX_CPU_COUNT"] = "4"
+
+# --- AUTOMATIC BACKEND .ENV LOADER ---
+def load_dotenv(filepath: str = ".env"):
+    """Reads .env file from project root into os.environ."""
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip('"').strip("'")
+                        if k:
+                            os.environ[k] = v
+        except Exception:
+            pass
+
+load_dotenv()
 import json
 import time
 import requests
@@ -831,9 +850,10 @@ with col_mine:
 # 2. PROMINENT AI SAFETY ASSISTANT (THE EXPERT COPILOT ON THE RIGHT)
 # ------------------------------------------------------------------------------
 with col_ai:
-    # Header with API Connection Status
-    has_api_key = bool(st.session_state.gemini_api_key and st.session_state.gemini_api_key.strip())
-    api_status_badge = "⚡ GEMINI 1.5 FLASH: CONNECTED" if has_api_key else "🔒 LOCAL ENGINE (NO API KEY)"
+    # Read API key strictly from backend environment (.env)
+    gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    has_api_key = bool(gemini_api_key)
+    api_status_badge = "⚡ GEMINI 1.5 FLASH: ACTIVE (.env)" if has_api_key else "🔒 LOCAL ENGINE (Add GEMINI_API_KEY to .env for live LLM)"
     api_badge_color = "#34d399" if has_api_key else "#94a3b8"
 
     st.markdown(f"""
@@ -847,21 +867,6 @@ with col_ai:
         </div>
     </div>
     """, unsafe_allow_html=True)
-
-    # Optional Gemini API Key input
-    with st.expander("🔑 Configure Gemini API Key (Optional)", expanded=not has_api_key):
-        input_key = st.text_input(
-            "Enter Google Gemini API Key:",
-            value=st.session_state.gemini_api_key,
-            type="password",
-            placeholder="AIzaSy...",
-            help="If provided, queries call live Google Gemini 1.5 Flash. If blank, local rule-based reasoning is used.",
-        )
-        if input_key != st.session_state.gemini_api_key:
-            st.session_state.gemini_api_key = input_key
-            st.rerun()
-        if not has_api_key:
-            st.caption("ℹ️ *Running in Local Offline Rule Mode. To enable live external Gemini LLM calls, paste your Gemini API key above.*")
 
     # Quick One-Click Starter Questions
     st.markdown('<div style="font-size: 0.78rem; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">QUICK QUESTIONS:</div>', unsafe_allow_html=True)
@@ -916,10 +921,10 @@ with col_ai:
             f"Grounded SOP: {sop_info.get('passage_id', '[TARP-SOP-01]')}: {sop_info.get('text', 'Routine monitoring.')}"
         )
 
-        # 1. If Gemini API key is provided, execute REAL LIVE GEMINI API CALL
+        # 1. If Gemini API key is configured in .env, execute REAL LIVE GEMINI API CALL
         if has_api_key:
             with st.spinner("Calling Google Gemini 1.5 Flash..."):
-                reply = call_real_gemini_api(st.session_state.gemini_api_key, prompt_to_process, context_str)
+                reply = call_real_gemini_api(gemini_api_key, prompt_to_process, context_str)
                 if not reply:
                     reply = "⚠️ No response received from Gemini endpoint."
         else:
@@ -933,14 +938,14 @@ with col_ai:
                         f"radar velocity is **{cur_sec['radar_velocity_mm_hr']:.3f} mm/h** (safe threshold is < 1.5 mm/h), "
                         f"pore pressure is **{cur_sec['pore_pressure_kpa']:.1f} kPa**, and rainfall is **{cur_sec['rainfall_3h_mm']:.2f} mm**. "
                         "Routine operations are authorized.\n\n"
-                        "*(Note: Running in local offline rule mode. Add Gemini API key above for live LLM reasoning.)*"
+                        "*(Note: Running in local offline rule mode. Add your GEMINI_API_KEY in the .env file to enable live LLM calls.)*"
                     )
                 else:
                     reply = (
                         f"⚠️ **Attention: {cur_sec['name']} is at Level {level_rank[sec_level]} {sec_level}.**\n\n"
                         f"Dataset row `#{active_row_idx}` recorded radar velocity at **{cur_sec['radar_velocity_mm_hr']:.3f} mm/h**. "
                         f"Directive: *{cur_sec['directive']}*\n\n"
-                        "*(Note: Running in local offline rule mode. Add Gemini API key above for live LLM reasoning.)*"
+                        "*(Note: Running in local offline rule mode. Add your GEMINI_API_KEY in the .env file to enable live LLM calls.)*"
                     )
             elif "north wall" in q_lower or "happening" in q_lower:
                 reply = (
