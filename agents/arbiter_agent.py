@@ -4,6 +4,7 @@ arbiter_agent.py - Decision Arbiter & Alert Package Responder Agent.
 Role:
 Arbitrates between deterministic TARP rules and ML risk forecast,
 enforces asymmetric caution and discrepancy flagging, and builds dispatch alert packages.
+Enriched with LLMRouter for plain-language arbitration justifications.
 """
 
 from typing import Any, Dict, List
@@ -11,6 +12,7 @@ from agents.base_agent import BaseAgent
 from blackboard import MineBlackboard
 from sk_compat import kernel_function
 from tools.arbitration_tools import arbitrate_decision, build_alert_package
+from tools.llm_router import get_llm_router
 
 
 class ArbiterAgent(BaseAgent):
@@ -61,6 +63,19 @@ class ArbiterAgent(BaseAgent):
 
         # Tool 1: Arbitrate decision (Asymmetric caution + discrepancy detection)
         decision = self.arbitrate(tarp_level, forecast_tier, health_status)
+
+        # Multi-Agent LLM Call: Explain asymmetric elevation if divergence detected
+        if decision.get("discrepancy_detected") and context.get("enable_llm_arbiter", False):
+            router = get_llm_router()
+            llm_just = router.generate_arbiter_explanation(
+                zone_id=zone_id,
+                tarp_level=tarp_level,
+                forecast_tier=forecast_tier,
+                effective_level=decision.get("effective_alert_level", "GREEN"),
+                discrepancy=decision.get("discrepancy_detected", False),
+            )
+            if llm_just:
+                decision["llm_justification"] = llm_just
 
         # Tool 2: Build alert dispatch package
         alert_pkg = self.build_package(zone_id, decision, geofenced_assets, citation)

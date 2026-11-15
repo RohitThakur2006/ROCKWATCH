@@ -135,6 +135,24 @@ class RockWatchController:
         }
         return self.governance_agent.run(self.blackboard, ctx)
 
+    def submit_desensitization_request(
+        self,
+        zone_id: str,
+        requested_by_role: str = "GEOTECH_ENGINEER",
+        proposed_multiplier: float = 0.85,
+        duration_hours: float = 8.0,
+        justification: str = "Thermal drift verified by extensometer.",
+    ) -> Dict[str, Any]:
+        """Convenience alias for submit_desensitization_proposal."""
+        return self.submit_desensitization_proposal(
+            zone_id=zone_id,
+            operator_id="GEO_P_MEHTA",
+            reason=justification,
+            approver_role=requested_by_role,
+            duration_hours=duration_hours,
+            requested_sensitivity=proposed_multiplier,
+        )
+
     def evaluate_challenger_model(
         self,
         champion_metrics: Dict[str, float],

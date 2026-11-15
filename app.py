@@ -54,6 +54,7 @@ from blackboard import (
 )
 from controller import RockWatchController
 from tools.rag_tools import retrieve_sop
+from tools.llm_router import get_llm_router
 from tools.simulation_engine import GeotechnicalSimulationEngine
 
 # --- PAGE CONFIGURATION (Full Width, Dark Base) ---
@@ -528,48 +529,10 @@ def build_clean_3d_mine_figure(
 
 
 # ==============================================================================
-# REAL GEMINI API CALLER (REST HTTPS)
+# ENTERPRISE MULTI-KEY & LITELLM ROUTER
 # ==============================================================================
-def call_real_gemini_api(api_key: str, user_prompt: str, context_str: str) -> str:
-    """
-    Directly calls Google Gemini 1.5 Flash via REST API using user-provided API key.
-    """
-    if not api_key:
-        return None
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key.strip()}"
-    headers = {"Content-Type": "application/json"}
-    body = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [
-                    {
-                        "text": (
-                            "You are RockWatch AI, an expert geotechnical safety copilot for open-pit mines. "
-                            "Analyze the live multi-sensor dataset readings and answer the operator's query in a helpful, "
-                            "clear, and reassuring manner. Cite specific sensor numbers and SOP guidelines.\n\n"
-                            f"--- LIVE MINE DATASET CONTEXT ---\n{context_str}\n\n"
-                            f"--- OPERATOR QUERY ---\n{user_prompt}"
-                        )
-                    }
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.25,
-            "maxOutputTokens": 600,
-        }
-    }
-    try:
-        resp = requests.post(url, headers=headers, json=body, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            return data["candidates"][0]["content"]["parts"][0]["text"]
-        else:
-            err_msg = resp.json().get("error", {}).get("message", resp.text)
-            return f"⚠️ **Gemini API Error ({resp.status_code}):** {err_msg}"
-    except Exception as e:
-        return f"⚠️ **API Connection Error:** Could not reach Gemini endpoint: {str(e)}"
+llm_router = get_llm_router()
+llm_router.reload()
 
 
 # ==============================================================================
@@ -850,11 +813,21 @@ with col_mine:
 # 2. PROMINENT AI SAFETY ASSISTANT (THE EXPERT COPILOT ON THE RIGHT)
 # ------------------------------------------------------------------------------
 with col_ai:
-    # Read API key strictly from backend environment (.env)
-    gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    has_api_key = bool(gemini_api_key)
-    api_status_badge = "⚡ GEMINI 1.5 FLASH: ACTIVE (.env)" if has_api_key else "🔒 LOCAL ENGINE (Add GEMINI_API_KEY to .env for live LLM)"
-    api_badge_color = "#34d399" if has_api_key else "#94a3b8"
+    router_status = llm_router.get_status()
+    has_keys = router_status["total_keys"] > 0
+    model_name = router_status["model_name"]
+    total_keys = router_status["total_keys"]
+    rpm_cap = router_status["total_rpm_capacity"]
+    daily_cap = router_status["daily_capacity"]
+
+    if has_keys or router_status["successful_calls"] > 0:
+        api_status_badge = f"⚡ LITELLM / 11-KEY GEMINI POOL: ACTIVE ({model_name})"
+        api_subtext = f"Key Pool: {total_keys} Keys | Capacity: {rpm_cap} RPM ({daily_cap:,} calls/day) | Calls: {router_status['total_calls']}"
+        api_badge_color = "#34d399"
+    else:
+        api_status_badge = "🔒 LOCAL DETERMINISTIC ENGINE (Configure LiteLLM or GEMINI_API_KEYS in .env)"
+        api_subtext = "Deterministic RAG & TARP rules active. No external LLM keys detected."
+        api_badge_color = "#94a3b8"
 
     st.markdown(f"""
     <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(59, 130, 246, 0.2); padding-bottom: 8px; margin-bottom: 8px;">
@@ -863,6 +836,7 @@ with col_ai:
             <div>
                 <div style="font-weight: 800; font-size: 1.05rem; color: #f1f5f9;">RockWatch AI Safety Assistant</div>
                 <div style="font-size: 0.72rem; color: {api_badge_color}; font-family: monospace;">{api_status_badge}</div>
+                <div style="font-size: 0.68rem; color: #64748b; font-family: monospace;">{api_subtext}</div>
             </div>
         </div>
     </div>
@@ -921,14 +895,22 @@ with col_ai:
             f"Grounded SOP: {sop_info.get('passage_id', '[TARP-SOP-01]')}: {sop_info.get('text', 'Routine monitoring.')}"
         )
 
-        # 1. If Gemini API key is configured in .env, execute REAL LIVE GEMINI API CALL
-        if has_api_key:
-            with st.spinner("Calling Google Gemini 1.5 Flash..."):
-                reply = call_real_gemini_api(gemini_api_key, prompt_to_process, context_str)
-                if not reply:
-                    reply = "⚠️ No response received from Gemini endpoint."
-        else:
-            # 2. Local Deterministic Rule-Engine Fallback (Clearly labeled)
+        with st.spinner(f"Querying Multi-Agent Copilot ({model_name})..."):
+            reply = llm_router.query(
+                prompt=prompt_to_process,
+                system_prompt=(
+                    "You are RockWatch AI, an expert geotechnical safety copilot for open-pit mines. "
+                    "Analyze the live multi-sensor dataset readings and answer the operator's query in a helpful, "
+                    "clear, and reassuring manner. Cite specific sensor numbers and SOP guidelines.\n\n"
+                    f"--- LIVE MINE DATASET CONTEXT ---\n{context_str}"
+                ),
+                agent_name="COPILOT_CHAT",
+                temperature=0.25,
+                max_tokens=600,
+            )
+
+        if not reply:
+            # Deterministic Rule-Engine Fallback (Clearly labeled)
             q_lower = prompt_to_process.lower()
             if "safe" in q_lower or "normal" in q_lower or "status" in q_lower:
                 if highest_global_level == "GREEN":
@@ -938,14 +920,14 @@ with col_ai:
                         f"radar velocity is **{cur_sec['radar_velocity_mm_hr']:.3f} mm/h** (safe threshold is < 1.5 mm/h), "
                         f"pore pressure is **{cur_sec['pore_pressure_kpa']:.1f} kPa**, and rainfall is **{cur_sec['rainfall_3h_mm']:.2f} mm**. "
                         "Routine operations are authorized.\n\n"
-                        "*(Note: Running in local offline rule mode. Add your GEMINI_API_KEY in the .env file to enable live LLM calls.)*"
+                        "*(Note: Running in local offline rule mode. Add your GEMINI_API_KEYS in .env or run LiteLLM to enable live LLM calls.)*"
                     )
                 else:
                     reply = (
                         f"⚠️ **Attention: {cur_sec['name']} is at Level {level_rank[sec_level]} {sec_level}.**\n\n"
                         f"Dataset row `#{active_row_idx}` recorded radar velocity at **{cur_sec['radar_velocity_mm_hr']:.3f} mm/h**. "
                         f"Directive: *{cur_sec['directive']}*\n\n"
-                        "*(Note: Running in local offline rule mode. Add your GEMINI_API_KEY in the .env file to enable live LLM calls.)*"
+                        "*(Note: Running in local offline rule mode. Add your GEMINI_API_KEYS in .env or run LiteLLM to enable live LLM calls.)*"
                     )
             elif "north wall" in q_lower or "happening" in q_lower:
                 reply = (
@@ -975,71 +957,142 @@ with col_ai:
 
 
 # ==============================================================================
-# 3. BOTTOM ACCORDION: ADVANCED ADMIN & AUDIT LOGS (OUT OF THE WAY)
+# 3. BOTTOM ACCORDION: ADVANCED ADMIN, AUDIT LOGS & LITELLM TELEMETRY
 # ==============================================================================
 st.markdown("---")
-with st.expander("🔒 Geotechnical Administration, Dual-Role Authorization & Audit Ledger", expanded=False):
-    st.caption("Enterprise management console: Geotechnical sign-off authority and cryptographic run log verification.")
+with st.expander("🔒 Geotechnical Administration, Multi-Agent Telemetry & Audit Ledger", expanded=False):
+    tab_admin, tab_audit, tab_llm = st.tabs([
+        "🛡️ Geotechnical Sign-Off Console",
+        "🔗 Cryptographic Audit Ledger",
+        "⚡ LiteLLM & 11-Key Multi-Agent Telemetry",
+    ])
     
-    adm_c1, adm_c2 = st.columns([1.1, 0.9], gap="large")
-    with adm_c1:
-        st.markdown("**Dual-Role Geotechnical Sign-Off Console**")
-        role_select = st.selectbox(
-            "Active Session Profile:",
-            options=["OPERATOR", "GEOTECH_ENGINEER"],
-            format_func=lambda r: "👤 Control Room Operator (Monitoring Only)" if r == "OPERATOR" else "🛡️ Dr. P. Mehta, Principal Geotechnical Engineer (#GEO-7714)",
-            key="user_role",
-        )
-        is_geotech = role_select == "GEOTECH_ENGINEER"
-        perm_text = "FULL AUTHORIZATION (DESENSITIZE & PROMOTE)" if is_geotech else "RESTRICTED (CANNOT DESENSITIZE SAFETY FLOORS)"
-        perm_color = "#34d399" if is_geotech else "#f59e0b"
-        st.markdown(f"<div style='font-size: 0.78rem; font-family: monospace; color: {perm_color}; margin-bottom: 8px;'>PERMISSIONS: {perm_text}</div>", unsafe_allow_html=True)
+    with tab_admin:
+        adm_c1, adm_c2 = st.columns([1.1, 0.9], gap="large")
+        with adm_c1:
+            st.markdown("**Dual-Role Geotechnical Sign-Off Console**")
+            role_select = st.selectbox(
+                "Active Session Profile:",
+                options=["OPERATOR", "GEOTECH_ENGINEER"],
+                format_func=lambda r: "👤 Control Room Operator (Monitoring Only)" if r == "OPERATOR" else "🛡️ Dr. P. Mehta, Principal Geotechnical Engineer (#GEO-7714)",
+                key="user_role",
+            )
+            is_geotech = role_select == "GEOTECH_ENGINEER"
+            perm_text = "FULL AUTHORIZATION (DESENSITIZE & PROMOTE)" if is_geotech else "RESTRICTED (CANNOT DESENSITIZE SAFETY FLOORS)"
+            perm_color = "#34d399" if is_geotech else "#f59e0b"
+            st.markdown(f"<div style='font-size: 0.78rem; font-family: monospace; color: {perm_color}; margin-bottom: 8px;'>PERMISSIONS: {perm_text}</div>", unsafe_allow_html=True)
 
-        ticket = st.session_state.review_ticket
-        st.markdown(f"""
-        <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 8px; padding: 10px; margin-bottom: 8px; font-size: 0.82rem;">
-            <strong>Ticket #{ticket['id']}</strong> | Target: {cur_sec['name']} | Status: {'APPROVED' if ticket['approved'] else 'PENDING'}<br>
-            <span style="color: #94a3b8;">Requested Action: Apply temporary 0.80x multiplier for thermal drift.</span><br>
-            <span style="color: #f87171; font-family: monospace; font-size: 0.75rem;">Safety constraint: TARP Red 15.0 mm/h safety floor cannot be suppressed.</span>
-        </div>
-        """, unsafe_allow_html=True)
+            ticket = st.session_state.review_ticket
+            st.markdown(f"""
+            <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 8px; padding: 10px; margin-bottom: 8px; font-size: 0.82rem;">
+                <strong>Ticket #{ticket['id']}</strong> | Target: {cur_sec['name']} | Status: {'APPROVED' if ticket['approved'] else 'PENDING'}<br>
+                <span style="color: #94a3b8;">Requested Action: Apply temporary 0.80x multiplier for thermal drift.</span><br>
+                <span style="color: #f87171; font-family: monospace; font-size: 0.75rem;">Safety constraint: TARP Red 15.0 mm/h safety floor cannot be suppressed.</span>
+            </div>
+            """, unsafe_allow_html=True)
 
-        sub_c1, sub_c2 = st.columns(2)
-        with sub_c1:
-            if st.button("✍️ Authorize Decision", use_container_width=True):
-                if is_geotech:
-                    ticket["approved"] = True
-                    ticket["approved_by"] = "Dr. P. Mehta (#GEO-7714)"
-                    ctrl.submit_desensitization_request(
-                        zone_id=chosen_sector,
-                        requested_by_role="GEOTECH_ENGINEER",
-                        proposed_multiplier=0.80,
-                        duration_hours=4.0,
-                        justification="Thermal drift verified by extensometer.",
-                    )
-                    st.success("✅ APPROVED & DIGITALLY SIGNED by Principal Geotech Engineer!")
-                else:
-                    st.error("❌ ACCESS DENIED: Operators cannot authorize desensitization.")
-        with sub_c2:
-            if st.button("⏩ Fast-Forward +5h (Auto-Expiry)", use_container_width=True):
-                st.session_state.sim_time_hour = min(24.0, st.session_state.sim_time_hour + 5.0)
-                if ticket["approved"]:
-                    ticket["approved"] = False
-                    ticket["status"] = "EXPIRED"
-                st.rerun()
+            sub_c1, sub_c2 = st.columns(2)
+            with sub_c1:
+                if st.button("✍️ Authorize Decision", use_container_width=True):
+                    if is_geotech:
+                        ticket["approved"] = True
+                        ticket["approved_by"] = "Dr. P. Mehta (#GEO-7714)"
+                        ctrl.submit_desensitization_request(
+                            zone_id=chosen_sector,
+                            requested_by_role="GEOTECH_ENGINEER",
+                            proposed_multiplier=0.80,
+                            duration_hours=4.0,
+                            justification="Thermal drift verified by extensometer.",
+                        )
+                        st.success("✅ APPROVED & DIGITALLY SIGNED by Principal Geotech Engineer!")
+                    else:
+                        st.error("❌ ACCESS DENIED: Operators cannot authorize desensitization.")
+            with sub_c2:
+                if st.button("⏩ Fast-Forward +5h (Auto-Expiry)", use_container_width=True):
+                    st.session_state.sim_time_hour = min(24.0, st.session_state.sim_time_hour + 5.0)
+                    if ticket["approved"]:
+                        ticket["approved"] = False
+                        ticket["status"] = "EXPIRED"
+                    st.rerun()
 
-    with adm_c2:
-        st.markdown(f"**Cryptographic Tamper-Proof Audit Ledger (SHA-256)** — Anchor: `{bb.get_head_hash()[:14]}...`")
+        with adm_c2:
+            st.markdown("**Asymmetric Safety Policy Enforcement**")
+            st.info(
+                "• **Principle of Asymmetric Safety:** Operators may elevate alert levels at any time, but only a certified "
+                "Geotechnical Engineer can authorize sensitivity attenuation.\n\n"
+                "• **Fail-Closed Auto-Expiry:** All sensitivity relaxations auto-expire back to baseline (1.00x) within 12 hours.\n\n"
+                "• **Inviolable Red Safety Floor:** TARP Level 4 Red (15.0 mm/h) velocity threshold can NEVER be suppressed by any user or model."
+            )
+
+    with tab_audit:
+        st.markdown(f"**Cryptographic Tamper-Proof Audit Ledger (SHA-256)** — Genesis Root Anchor: `{bb.get_head_hash()[:14]}...`")
         if os.path.exists("logs/run_log.jsonl"):
             with open("logs/run_log.jsonl", "r", encoding="utf-8") as f:
                 lines = [json.loads(line.strip()) for line in f if line.strip()]
             entries = []
-            for e in lines[-4:]:
+            for e in lines[-6:]:
                 entries.append({
                     "Seq": e.get("sequence_id"),
                     "Event": e.get("event_type"),
                     "Zone": e.get("zone_id"),
-                    "Payload": e.get("payload_hash", "")[:10] + "...",
-                    "Head": e.get("head_hash", "")[:10] + "...",
+                    "Payload Hash": e.get("payload_hash", "")[:12] + "...",
+                    "Head Hash": e.get("head_hash", "")[:12] + "...",
                 })
             st.dataframe(pd.DataFrame(entries), width="stretch", hide_index=True)
+        else:
+            st.caption("No log entries written yet.")
+
+    with tab_llm:
+        st.markdown("**⚡ Multi-Agent LLM Call Telemetry & LiteLLM 11-Key Gemini Pool Monitor**")
+        st.caption(
+            "Real-time monitoring of all LLM API invocations across the 8 specialized agents and the Copilot. "
+            "Routes dynamically to your local LiteLLM proxy or direct 11-key Gemini Flash pool."
+        )
+
+        stat_c1, stat_c2, stat_c3, stat_c4 = st.columns(4)
+        with stat_c1:
+            st.metric("Total LLM Calls", f"{router_status['total_calls']}")
+        with stat_c2:
+            st.metric("Successful Calls", f"{router_status['successful_calls']}")
+        with stat_c3:
+            st.metric("Pool RPM Capacity", f"{router_status['total_rpm_capacity']} RPM", help="11 Keys x 15 RPM each")
+        with stat_c4:
+            st.metric("Daily Request Limit", f"{router_status['daily_capacity']:,} / day", help="11 Keys x 500 requests/day each")
+
+        m_c1, m_c2 = st.columns([1.1, 0.9])
+        with m_c1:
+            st.markdown(f"""
+            <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: 8px; padding: 12px; font-size: 0.82rem;">
+                <div><strong>Routing Mode:</strong> <span style="color: #38bdf8;">{router_status['mode']}</span></div>
+                <div><strong>Active Endpoint:</strong> <span style="color: #34d399;">{router_status['active_endpoint']}</span></div>
+                <div><strong>Target Model:</strong> <span style="color: #cbd5e1;">{router_status['model_name']}</span></div>
+                <div><strong>LiteLLM Proxy Base:</strong> <span style="color: #94a3b8; font-family: monospace;">{router_status['litellm_base']}</span></div>
+                <div><strong>Key Pool Status:</strong> <span style="color: #34d399;">{router_status['active_keys']} Active</span> / <span style="color: #f87171;">{router_status['cooldown_keys']} Cooldown</span> (Total: {router_status['total_keys']} Keys)</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with m_c2:
+            st.markdown("""
+            <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: 8px; padding: 12px; font-size: 0.82rem;">
+                <strong>Launch LiteLLM Proxy on your Laptop:</strong>
+                <pre style="background: #020408; padding: 6px; border-radius: 4px; margin-top: 6px; color: #38bdf8; font-size: 0.75rem;">litellm --config litellm_config.yaml --port 4000</pre>
+                <div style="color: #94a3b8; font-size: 0.74rem; margin-top: 4px;">
+                    Config template saved in <code style="color: #38bdf8;">litellm_config.yaml.example</code>. Direct multi-key fallback configured in <code style="color: #38bdf8;">.env</code>.
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("**Recent Multi-Agent Invocation Log**")
+        if llm_router.call_history:
+            log_entries = []
+            for h in reversed(llm_router.call_history[-10:]):
+                log_entries.append({
+                    "Timestamp": time.strftime("%H:%M:%S", time.localtime(h.get("timestamp", 0))),
+                    "Agent": h.get("agent"),
+                    "Prompt Preview": h.get("prompt_preview"),
+                    "Response Preview": h.get("response_preview"),
+                    "Latency (ms)": f"{h.get('latency_ms', 0):.0f} ms",
+                    "Status": h.get("status"),
+                })
+            st.dataframe(pd.DataFrame(log_entries), width="stretch", hide_index=True)
+        else:
+            st.caption("No agent LLM calls dispatched yet in this session. Ask a question to the Copilot above to dispatch live calls!")

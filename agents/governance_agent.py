@@ -4,6 +4,7 @@ governance_agent.py - Human Authority Governance & Root Cause Analysis Agent.
 Role:
 Manages desensitization proposals under the Asymmetric Safety Principle (requires GEOTECH_ENGINEER),
 enforces time-limited auto-expiry, and analyzes root causes of missed events for human sign-off.
+Powered by LLMRouter for diagnostic failure analysis.
 """
 
 from typing import Any, Dict
@@ -11,6 +12,7 @@ from agents.base_agent import BaseAgent
 from blackboard import MineBlackboard, DesensitizationProposal
 from sk_compat import kernel_function
 from tools.governance_tools import process_desensitization_proposal, propose_root_cause
+from tools.llm_router import get_llm_router
 
 
 class GovernanceAgent(BaseAgent):
@@ -98,6 +100,18 @@ class GovernanceAgent(BaseAgent):
             clean_telem = blackboard.read("clean_telemetry").get(zone_id, {})
             health = blackboard.read("sensor_health").get(zone_id, {})
             root_cause = self.diagnose_miss(zone_id, clean_telem, health)
+
+            # Multi-Agent LLM Call: Generate failure analysis if requested
+            if context.get("enable_llm_governance", False):
+                router = get_llm_router()
+                llm_diag = router.generate_governance_root_cause(
+                    zone_id=zone_id,
+                    detached_volume_m3=surface_changes.get("volume_detached_m3", 10.0),
+                    telemetry=clean_telem,
+                    sensor_health=health,
+                )
+                if llm_diag:
+                    root_cause["diagnostic_analysis"] = llm_diag
 
             # Write root cause to golden_pool for geotech sign-off
             golden_pool = blackboard.read("golden_pool")

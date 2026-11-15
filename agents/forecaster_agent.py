@@ -3,7 +3,8 @@ forecaster_agent.py - Calibrated Horizon Risk Forecaster Agent.
 
 Role:
 Computes zone-level rockfall probability over a 6-hour horizon,
-modulates risk via approved sensitivity proposals, and quantifies sensor uncertainty bounds.
+modulates risk via approved sensitivity proposals, quantifies sensor uncertainty bounds,
+and enriches forecasts with LLM physical correlation narratives via LLMRouter.
 """
 
 from typing import Any, Dict
@@ -11,6 +12,7 @@ from agents.base_agent import BaseAgent
 from blackboard import MineBlackboard
 from sk_compat import kernel_function
 from tools.forecast_tools import compute_zone_risk, create_provenance_record
+from tools.llm_router import get_llm_router
 
 
 class ForecasterAgent(BaseAgent):
@@ -70,9 +72,27 @@ class ForecasterAgent(BaseAgent):
         # Tool 2: Build provenance record
         provenance = self.log_provenance(zone_id, risk_data)
 
+        # Multi-Agent LLM Call: Generate cross-sensor correlation narrative if requested
+        p_risk = risk_data.get("risk_probability", 0.0)
+        tier = risk_data.get("risk_tier", "LOW")
+        narrative = f"6-hour calibrated rockfall probability is {p_risk:.1%} under tier {tier}."
+
+        if context.get("enable_llm_narrative", False):
+            router = get_llm_router()
+            llm_narrative = router.generate_forecaster_narrative(
+                zone_id=zone_id,
+                p_rockfall=p_risk,
+                risk_tier=tier,
+                uncertainty=risk_data.get("uncertainty_margin", 0.05),
+                telemetry=clean_telemetry,
+            )
+            if llm_narrative:
+                narrative = llm_narrative
+
         combined_forecast = {
             **risk_data,
             "provenance": provenance,
+            "narrative": narrative,
         }
 
         # Explicit Blackboard Write
