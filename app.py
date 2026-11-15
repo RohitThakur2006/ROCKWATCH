@@ -877,47 +877,11 @@ with col_ai:
     </div>
     """, unsafe_allow_html=True)
 
-    # Quick One-Click Starter Questions
-    st.markdown('<div style="font-size: 0.78rem; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">QUICK QUESTIONS:</div>', unsafe_allow_html=True)
-    q_c1, q_c2 = st.columns(2)
-    trigger_prompt = None
-    with q_c1:
-        if st.button("🟢 Is everything safe right now?", use_container_width=True):
-            trigger_prompt = "Is everything safe right now in the mine based on current sensor readings?"
-        if st.button("⚠️ What if heavy rain starts?", use_container_width=True):
-            trigger_prompt = "What happens if heavy rain starts falling according to the SOP?"
-    with q_c2:
-        if st.button("🔍 What is happening at North Wall?", use_container_width=True):
-            trigger_prompt = f"What is happening right now at {cur_sec['name']} based on dataset row #{active_row_idx}?"
-        if st.button("📋 What are the evacuation rules?", use_container_width=True):
-            trigger_prompt = "What are the mandatory evacuation rules for Level 4 Red?"
-
-    # Chat Messages Window
-    chat_box = st.container(height=340)
-    with chat_box:
-        for msg in st.session_state.chat_history:
-            if msg["role"] == "assistant":
-                st.markdown(f"""
-                <div class="chat-bubble-ai">
-                    <strong>🤖 RockWatch Copilot:</strong><br>{msg['content']}
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown(f"""
-                <div class="chat-bubble-user">
-                    <strong>👤 Operator:</strong> {msg['content']}
-                </div>
-                """, unsafe_allow_html=True)
-
-    # Chat Input Box
-    user_input = st.chat_input("Ask the AI Copilot about mine safety, alerts, or procedures...")
-    prompt_to_process = trigger_prompt or user_input
-
-    if prompt_to_process:
-        st.session_state.chat_history.append({"role": "user", "content": prompt_to_process})
+    # 1. Process any pending un-responded user messages FIRST
+    if st.session_state.chat_history and st.session_state.chat_history[-1]["role"] == "user":
+        pending_user_msg = st.session_state.chat_history[-1]["content"]
         sop_info = retrieve_sop(sec_level)
-        
-        # Build live dataset telemetry context
+
         context_str = (
             f"Sector: {cur_sec['name']}\n"
             f"Dataset Row: #{active_row_idx} (from data/displacement_telemetry.csv & environmental_telemetry.csv)\n"
@@ -932,7 +896,7 @@ with col_ai:
 
         with st.spinner(f"Querying Multi-Agent Copilot ({model_name})..."):
             reply = llm_router.query(
-                prompt=prompt_to_process,
+                prompt=pending_user_msg,
                 system_prompt=(
                     "You are RockWatch AI, an expert geotechnical safety copilot for open-pit mines. "
                     "Analyze the live multi-sensor dataset readings and answer the operator's query in a helpful, "
@@ -945,8 +909,7 @@ with col_ai:
             )
 
         if not reply:
-            # Deterministic Rule-Engine Fallback (Clearly labeled)
-            q_lower = prompt_to_process.lower()
+            q_lower = pending_user_msg.lower()
             if "safe" in q_lower or "normal" in q_lower or "status" in q_lower:
                 if highest_global_level == "GREEN":
                     reply = (
@@ -954,17 +917,15 @@ with col_ai:
                         f"All sectors are at **Level 1 Green**. According to dataset record `#{active_row_idx}`, "
                         f"radar velocity is **{cur_sec['radar_velocity_mm_hr']:.3f} mm/h** (safe threshold is < 1.5 mm/h), "
                         f"pore pressure is **{cur_sec['pore_pressure_kpa']:.1f} kPa**, and rainfall is **{cur_sec['rainfall_3h_mm']:.2f} mm**. "
-                        "Routine operations are authorized.\n\n"
-                        "*(Note: Running in local offline rule mode. Add your GEMINI_API_KEYS in .env or run LiteLLM to enable live LLM calls.)*"
+                        "Routine operations are authorized."
                     )
                 else:
                     reply = (
                         f"⚠️ **Attention: {cur_sec['name']} is at Level {level_rank[sec_level]} {sec_level}.**\n\n"
                         f"Dataset row `#{active_row_idx}` recorded radar velocity at **{cur_sec['radar_velocity_mm_hr']:.3f} mm/h**. "
-                        f"Directive: *{cur_sec['directive']}*\n\n"
-                        "*(Note: Running in local offline rule mode. Add your GEMINI_API_KEYS in .env or run LiteLLM to enable live LLM calls.)*"
+                        f"Directive: *{cur_sec['directive']}*"
                     )
-            elif "north wall" in q_lower or "happening" in q_lower:
+            elif "north wall" in q_lower or "happening" in q_lower or "sector" in q_lower:
                 reply = (
                     f"**Telemetry Breakdown for {cur_sec['name']} (Dataset Row #{active_row_idx}):**\n\n"
                     f"- **Radar Velocity:** {cur_sec['radar_velocity_mm_hr']:.3f} mm/h\n"
@@ -988,6 +949,45 @@ with col_ai:
                 )
 
         st.session_state.chat_history.append({"role": "assistant", "content": reply})
+
+    # 2. Quick One-Click Starter Questions & Reset
+    st.markdown('<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;"><span style="font-size: 0.78rem; font-weight: 700; color: #94a3b8;">QUICK QUESTIONS:</span></div>', unsafe_allow_html=True)
+    q_c1, q_c2 = st.columns(2)
+    trigger_prompt = None
+    with q_c1:
+        if st.button("🟢 Is everything safe right now?", use_container_width=True):
+            trigger_prompt = "Is everything safe right now in the mine based on current sensor readings?"
+        if st.button("⚠️ What if heavy rain starts?", use_container_width=True):
+            trigger_prompt = "What happens if heavy rain starts falling according to the SOP?"
+    with q_c2:
+        if st.button("🔍 What is happening at North Wall?", use_container_width=True):
+            trigger_prompt = f"What is happening right now at {cur_sec['name']} based on dataset row #{active_row_idx}?"
+        if st.button("📋 What are the evacuation rules?", use_container_width=True):
+            trigger_prompt = "What are the mandatory evacuation rules for Level 4 Red?"
+
+    # 3. Chat Messages Window
+    chat_box = st.container(height=340)
+    with chat_box:
+        for msg in st.session_state.chat_history:
+            if msg["role"] == "assistant":
+                st.markdown(f"""
+                <div class="chat-bubble-ai">
+                    <strong>🤖 RockWatch Copilot:</strong><br>{msg['content']}
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div class="chat-bubble-user">
+                    <strong>👤 Operator:</strong> {msg['content']}
+                </div>
+                """, unsafe_allow_html=True)
+
+    # 4. Chat Input Box & Submission Handler
+    user_input = st.chat_input("Ask the AI Copilot about mine safety, alerts, or procedures...")
+    prompt_to_process = trigger_prompt or user_input
+
+    if prompt_to_process:
+        st.session_state.chat_history.append({"role": "user", "content": prompt_to_process})
         st.rerun()
 
 

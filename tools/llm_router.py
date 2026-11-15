@@ -34,6 +34,7 @@ class LLMRouter:
         self._load_config()
         self._key_index = 0
         self._key_cooldowns: Dict[str, float] = {}  # key -> cooldown_until_timestamp
+        self._litellm_cooldown_until: float = 0.0  # Fast-fail cooldown if LiteLLM is not running
         self.call_stats = {
             "total_calls": 0,
             "successful_calls": 0,
@@ -44,6 +45,14 @@ class LLMRouter:
             "active_endpoint": "INITIALIZING",
         }
         self.call_history: List[Dict[str, Any]] = []
+
+    @property
+    def api_model_name(self) -> str:
+        """Normalizes model identifier for Google Generative Language REST API."""
+        m = (self.model_name or "").lower().strip()
+        if "flash-light" in m or "flashlight" in m:
+            return "gemini-3.5-flash-lite"
+        return self.model_name
 
     def _load_config(self) -> None:
         """Loads configuration from environment variables."""
@@ -149,45 +158,50 @@ class LLMRouter:
         # ----------------------------------------------------------------------
         # Strategy 1: Attempt LiteLLM Proxy (OpenAI-compatible)
         # ----------------------------------------------------------------------
-        litellm_url = f"{self.litellm_base}/chat/completions"
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
+        now = time.time()
+        if now >= self._litellm_cooldown_until:
+            litellm_url = f"{self.litellm_base}/chat/completions"
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
 
-        litellm_payload = {
-            "model": self.model_name,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-        litellm_headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.litellm_key}",
-        }
+            litellm_payload = {
+                "model": self.model_name,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+            litellm_headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.litellm_key}",
+            }
 
-        try:
-            resp = requests.post(
-                litellm_url,
-                headers=litellm_headers,
-                json=litellm_payload,
-                timeout=self.timeout_seconds,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                content = data["choices"][0]["message"]["content"]
-                dt_ms = round((time.time() - t0) * 1000, 1)
+            try:
+                # Fast connect timeout (0.8s) avoids freezing UI when LiteLLM is not running
+                resp = requests.post(
+                    litellm_url,
+                    headers=litellm_headers,
+                    json=litellm_payload,
+                    timeout=(0.8, self.timeout_seconds),
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    content = data["choices"][0]["message"]["content"]
+                    dt_ms = round((time.time() - t0) * 1000, 1)
 
-                self.call_stats["successful_calls"] += 1
-                self.call_stats["litellm_calls"] += 1
-                self.call_stats["last_latency_ms"] = dt_ms
-                self.call_stats["active_endpoint"] = f"LiteLLM ({self.model_name})"
+                    self.call_stats["successful_calls"] += 1
+                    self.call_stats["litellm_calls"] += 1
+                    self.call_stats["last_latency_ms"] = dt_ms
+                    self.call_stats["active_endpoint"] = f"LiteLLM ({self.model_name})"
 
-                self._record_log(agent_name, prompt, content, dt_ms, "SUCCESS_LITELLM")
-                return content
-        except Exception:
-            # LiteLLM not running or timeout -> seamlessly proceed to Strategy 2
-            pass
+                    self._record_log(agent_name, prompt, content, dt_ms, "SUCCESS_LITELLM")
+                    return content
+                else:
+                    self._litellm_cooldown_until = now + 15.0
+            except Exception:
+                # LiteLLM connection timed out or refused -> cool down for 30s to keep UI instant
+                self._litellm_cooldown_until = now + 30.0
 
         # ----------------------------------------------------------------------
         # Strategy 2: Direct Multi-Key Gemini REST Pool
@@ -200,7 +214,7 @@ class LLMRouter:
                     break
                 key, key_idx = key_info
 
-                gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={key}"
+                gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.api_model_name}:generateContent?key={key}"
                 full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
 
                 gemini_body = {
@@ -216,7 +230,7 @@ class LLMRouter:
                         gemini_url,
                         headers={"Content-Type": "application/json"},
                         json=gemini_body,
-                        timeout=self.timeout_seconds,
+                        timeout=(2.5, self.timeout_seconds),
                     )
                     if resp.status_code == 200:
                         data = resp.json()
