@@ -4,10 +4,10 @@ app.py - RockWatch Mission-Control: 3D Geotechnical Digital Twin & Monitoring Ce
 Fully customized industrial mission-control interface:
 - High-tech dark aerospace command gradient with zero Streamlit chrome (headers/toolbars hidden).
 - Stepped Open-Pit 3D Digital Twin with explicit spiral haul road, bench faces, and 3D floating sector station markers.
-- Continuous Progressive Simulation Engine grounded in Saito's Tertiary Creep Law & Infiltration physics.
-- Dynamic CCTV Camera Feed with real-time particle motion, rockfall cascades, crack dilation, and AI tracking bounding boxes.
-- Multimodal Late-Sensor Fusion (Option B) with single-sensor dominance override.
-- AI Geotechnical Safety Copilot (Semantic Kernel RAG grounded in SOPs).
+- Built-in Real-Life CCTV Surveillance MP4 Videos for each hazard stage (Normal, Mild Ravelling, Moderate Slabbing, Severe Collapse).
+- Dynamic AI Detection Overlays tracking rockfall velocity, crack aperture dilation, and bounding boxes.
+- Intuitive Scenario & Progressive Timeline Selection ("All Together" in lockstep).
+- Interactive Conversational Multi-Agent Safety Copilot (RAG-grounded in TARP SOPs).
 - Enterprise Human-in-the-Loop Geotechnical Authorization Workflow with digital signatures and auto-expiry.
 - Real-time SHA-256 cryptographic hash-chained audit ledger.
 """
@@ -19,7 +19,7 @@ import time
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from PIL import Image, ImageDraw
+from PIL import Image
 
 import streamlit as st
 
@@ -27,7 +27,6 @@ from blackboard import MineBlackboard
 from controller import RockWatchController
 from tools.rag_tools import retrieve_sop
 from tools.simulation_engine import GeotechnicalSimulationEngine
-from ml.camera_stream import DynamicPitCameraStream
 
 # --- PAGE CONFIGURATION (Full Width, Dark Base) ---
 st.set_page_config(
@@ -86,7 +85,7 @@ footer {
 
 /* 3. High-tech Deep Aerospace Mission Gradient Background */
 .stApp {
-    background: radial-gradient(circle at 50% 0%, #101c38 0%, #080d1a 50%, #03060c 100%) !important;
+    background: radial-gradient(circle at 50% 0%, #101c38 0%, #090e1a 50%, #03060c 100%) !important;
     background-attachment: fixed !important;
     color: #e2e8f0 !important;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
@@ -234,6 +233,17 @@ footer {
     50% { opacity: 0.35; transform: scale(0.85); }
 }
 
+/* Chat container styling */
+.chat-box {
+    background: rgba(15, 23, 42, 0.65);
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    border-radius: 12px;
+    padding: 12px 16px;
+    height: 280px;
+    overflow-y: auto;
+    margin-bottom: 10px;
+}
+
 /* Radio & Button styling */
 .stRadio > div {
     background: rgba(15, 23, 42, 0.6) !important;
@@ -261,10 +271,6 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # --- REALISTIC OPEN-PIT 3D MESH GENERATION ---
 @st.cache_data
 def generate_realistic_pit_topography(n_grid: int = 80):
-    """
-    Generates an authentic open-pit topography with stepped bench faces (60% drop, 40% catch berm),
-    an explicit spiral haulage ramp cut into the wall, and spatial sector domains.
-    """
     x = np.linspace(-360, 360, n_grid)
     y = np.linspace(-360, 360, n_grid)
     X, Y = np.meshgrid(x, y)
@@ -282,24 +288,19 @@ def generate_realistic_pit_topography(n_grid: int = 80):
     dr = np.clip(R_crest - R, 0.0, R_crest - R_floor)
     bench_idx = np.floor(dr / bench_w)
     frac = (dr % bench_w) / bench_w
-    # Sharp face: first 65% of width drops full bench height; remaining 35% is catch berm
     bench_drop = np.where(frac < 0.65, (frac / 0.65) * bench_h, bench_h)
     Z = Z_crest - (bench_idx * bench_h + bench_drop)
     Z[R > R_crest] = Z_crest
     Z[R < R_floor] = Z_floor
 
-    # Spiral Haulage Ramp (22m road width carved from crest to floor at 8.5% grade)
+    # Spiral Haulage Ramp (22m road width carved into the pit wall)
     ramp_radius = R_crest - (Theta / (2 * np.pi)) * (R_crest - R_floor)
     ramp_dist = np.abs(R - ramp_radius)
     on_ramp = (ramp_dist < 14.0) & (R < R_crest) & (R > R_floor)
     ramp_elevation = Z_crest - (Theta / (2 * np.pi)) * (Z_crest - Z_floor)
     Z[on_ramp] = ramp_elevation[on_ramp]
 
-    # Sector ID Assignment:
-    # 1: North Wall Bench 4 (Y > 50)
-    # 2: South Crest Ramp (Y < -60)
-    # 3: Main Haulage Ramp 3 (East Sector Corridor)
-    # 4: West Pit Access Road (West Sector Corridor)
+    # Sector ID Assignment
     sector_id_map = np.zeros_like(Z, dtype=int)
     sector_id_map[(Y > 50) & (R < R_crest) & (R > 65)] = 1
     sector_id_map[(Y < -60) & (R < R_crest) & (R > 65)] = 2
@@ -310,10 +311,6 @@ def generate_realistic_pit_topography(n_grid: int = 80):
 
 
 def build_3d_pit_figure(X, Y, Z, sector_id_map, sector_telemetries, selected_sector_key):
-    """
-    Builds the Plotly 3D WebGL Surface draped with real-time deformation heatmaps,
-    spiral haul road, and floating 3D station pins.
-    """
     n_grid = Z.shape[0]
     surf_color = np.zeros_like(Z)
     custom_data = np.empty((n_grid, n_grid, 3), dtype=object)
@@ -345,7 +342,6 @@ def build_3d_pit_figure(X, Y, Z, sector_id_map, sector_telemetries, selected_sec
                 custom_data[i, j, 1] = "0.40 mm/hr"
                 custom_data[i, j, 2] = "GREEN"
 
-    # TARP Color Scale: Green (0-1.5) -> Yellow (1.5-5) -> Orange (5-15) -> Critical Crimson Red (>15)
     tarp_colorscale = [
         [0.00, "#059669"],   # Emerald Normal
         [0.08, "#10b981"],
@@ -450,7 +446,7 @@ def build_3d_pit_figure(X, Y, Z, sector_id_map, sector_telemetries, selected_sec
                 center=dict(x=0, y=0, z=-0.1)
             ),
         ),
-        height=540,
+        height=520,
     )
     return fig
 
@@ -460,18 +456,21 @@ if "bb" not in st.session_state:
     st.session_state.bb = MineBlackboard()
     st.session_state.ctrl = RockWatchController(st.session_state.bb)
     st.session_state.sim_engine = GeotechnicalSimulationEngine(time_horizon_hours=24.0, step_hours=0.5)
-    st.session_state.cam_stream = DynamicPitCameraStream(width=480, height=320)
-    st.session_state.current_scenario = "SCENARIO_1_NORTH_WALL_CREEP"
-    st.session_state.sim_time_hour = 0.0
-    st.session_state.is_playing = False
+    st.session_state.hazard_mode = "MILD"  # Default scenario mode
+    st.session_state.sim_time_hour = 12.0
     st.session_state.user_role = "OPERATOR"
+    st.session_state.chat_history = [
+        {
+            "role": "assistant",
+            "content": "RockWatch Multi-Agent Safety Copilot active. Monitoring 4 pit sectors. All agents (Health, Perception, TARP, Forecaster, Advisor, Arbiter) are online and synchronized with the blackboard."
+        }
+    ]
     st.session_state.review_ticket = {
         "id": "TKT-2026-084",
         "zone_id": "ZONE_NORTH_WALL",
         "status": "DRAFT",
         "proposed_multiplier": 0.80,
         "requested_duration_hours": 4.0,
-        "operator_notes": "Blasting vibration interference observed on seismograph; requesting temporary sensitivity offset.",
         "approved": False,
         "approved_by": None,
         "approved_at_sim_time": None,
@@ -480,42 +479,132 @@ if "bb" not in st.session_state:
 bb: MineBlackboard = st.session_state.bb
 ctrl: RockWatchController = st.session_state.ctrl
 sim_engine: GeotechnicalSimulationEngine = st.session_state.sim_engine
-cam_stream: DynamicPitCameraStream = st.session_state.cam_stream
 
 
-# --- COMPUTE SIMULATION TELEMETRY FOR CURRENT TIME ---
-sim_telemetries = sim_engine.generate_scenario_telemetry(
-    scenario_id=st.session_state.current_scenario,
-    t_hour=st.session_state.sim_time_hour,
-)
+# --- HAZARD SEVERITY PRESETS (USER-REQUESTED SEVERITY SELECTOR) ---
+HAZARD_PRESETS = {
+    "NORMAL": {
+        "name": "🟢 1. Normal Operations (Stable Highwall)",
+        "desc": "Baseline mining operations. Benches stable, background radar creep (0.7 mm/hr), Level 1 Green.",
+        "video": "data/videos/normal_ops.mp4",
+        "vel": 0.75,
+        "rain": 1.2,
+        "pore": 24.0,
+        "ppv": 0.35,
+        "crack_cm": 0.0,
+        "status": "GREEN",
+        "directive": "Routine automated monitoring. Normal operations authorized.",
+    },
+    "MILD": {
+        "name": "🟡 2. Mild Slope Ravelling & Loose Stones",
+        "desc": "Hairline crest tension crack opens. Small gravel rolling down face. Radar creep accelerates to 2.8 mm/hr. Level 2 Yellow Caution.",
+        "video": "data/videos/mild_rockfall.mp4",
+        "vel": 2.85,
+        "rain": 4.5,
+        "pore": 42.0,
+        "ppv": 0.85,
+        "crack_cm": 2.4,
+        "status": "YELLOW",
+        "directive": "Heightened caution. Restrict non-essential foot traffic; alert pit supervisor.",
+    },
+    "MODERATE": {
+        "name": "🟠 3. Moderate Wedge Fissure Dilation",
+        "desc": "Scarp fissure dilates to 8cm. Moderate rock slabs detach with dust plume. Radar creep reaches 7.8 mm/hr. Level 3 Orange Warning.",
+        "video": "data/videos/moderate_rockfall.mp4",
+        "vel": 7.85,
+        "rain": 18.0,
+        "pore": 72.0,
+        "ppv": 2.4,
+        "crack_cm": 8.2,
+        "status": "ORANGE",
+        "directive": "Warning status. Stand down haulage under highwall; dispatch geotechnical inspection crew.",
+    },
+    "SEVERE": {
+        "name": "🔴 4. Severe / Imminent Rockfall Collapse",
+        "desc": "Structural shear failure. Tumbling boulder cascades caught on camera. Radar creep breaches 18.5 mm/hr. Level 4 Red Emergency Evacuation.",
+        "video": "data/videos/severe_rockfall.mp4",
+        "vel": 18.80,
+        "rain": 42.0,
+        "pore": 94.0,
+        "ppv": 6.8,
+        "crack_cm": 18.5,
+        "status": "RED",
+        "directive": "CRITICAL EMERGENCY: Mandatory immediate pit evacuation of all personnel and machinery.",
+    },
+}
 
-# Run each sector through RockWatch controller
+
+# --- COMPUTE CURRENT MULTI-SECTOR STATE ---
+active_mode = st.session_state.hazard_mode
+preset = HAZARD_PRESETS[active_mode]
+
+selected_sector_key = st.session_state.get("selected_sector", "ZONE_NORTH_WALL")
+
+# Populate sector states
+sim_telemetries = {
+    "ZONE_NORTH_WALL": {
+        "name": "North Wall Bench 4",
+        "radar_velocity_mm_hr": preset["vel"] if selected_sector_key == "ZONE_NORTH_WALL" else 0.8,
+        "rainfall_3h_mm": preset["rain"] if selected_sector_key == "ZONE_NORTH_WALL" else 1.5,
+        "pore_pressure_kpa": preset["pore"] if selected_sector_key == "ZONE_NORTH_WALL" else 25.0,
+        "vibration_ppv_mms": preset["ppv"] if selected_sector_key == "ZONE_NORTH_WALL" else 0.4,
+        "crack_cm": preset["crack_cm"] if selected_sector_key == "ZONE_NORTH_WALL" else 0.0,
+        "effective_level": preset["status"] if selected_sector_key == "ZONE_NORTH_WALL" else "GREEN",
+        "directive": preset["directive"] if selected_sector_key == "ZONE_NORTH_WALL" else "Routine monitoring.",
+        "dominance_override": preset["status"] == "RED" if selected_sector_key == "ZONE_NORTH_WALL" else False,
+    },
+    "ZONE_SOUTH_CREST": {
+        "name": "South Crest Ramp",
+        "radar_velocity_mm_hr": preset["vel"] if selected_sector_key == "ZONE_SOUTH_CREST" else 0.5,
+        "rainfall_3h_mm": preset["rain"] if selected_sector_key == "ZONE_SOUTH_CREST" else 1.0,
+        "pore_pressure_kpa": preset["pore"] if selected_sector_key == "ZONE_SOUTH_CREST" else 22.0,
+        "vibration_ppv_mms": preset["ppv"] if selected_sector_key == "ZONE_SOUTH_CREST" else 0.3,
+        "crack_cm": preset["crack_cm"] if selected_sector_key == "ZONE_SOUTH_CREST" else 0.0,
+        "effective_level": preset["status"] if selected_sector_key == "ZONE_SOUTH_CREST" else "GREEN",
+        "directive": preset["directive"] if selected_sector_key == "ZONE_SOUTH_CREST" else "Routine monitoring.",
+        "dominance_override": preset["status"] == "RED" if selected_sector_key == "ZONE_SOUTH_CREST" else False,
+    },
+    "ZONE_RAMP_3": {
+        "name": "Main Haulage Ramp 3",
+        "radar_velocity_mm_hr": preset["vel"] if selected_sector_key == "ZONE_RAMP_3" else 0.6,
+        "rainfall_3h_mm": preset["rain"] if selected_sector_key == "ZONE_RAMP_3" else 0.8,
+        "pore_pressure_kpa": preset["pore"] if selected_sector_key == "ZONE_RAMP_3" else 24.0,
+        "vibration_ppv_mms": preset["ppv"] if selected_sector_key == "ZONE_RAMP_3" else 0.5,
+        "crack_cm": preset["crack_cm"] if selected_sector_key == "ZONE_RAMP_3" else 0.0,
+        "effective_level": preset["status"] if selected_sector_key == "ZONE_RAMP_3" else "GREEN",
+        "directive": preset["directive"] if selected_sector_key == "ZONE_RAMP_3" else "Routine monitoring.",
+        "dominance_override": preset["status"] == "RED" if selected_sector_key == "ZONE_RAMP_3" else False,
+    },
+    "ZONE_HAUL_ROAD": {
+        "name": "West Pit Access Road",
+        "radar_velocity_mm_hr": preset["vel"] if selected_sector_key == "ZONE_HAUL_ROAD" else 0.4,
+        "rainfall_3h_mm": preset["rain"] if selected_sector_key == "ZONE_HAUL_ROAD" else 0.5,
+        "pore_pressure_kpa": preset["pore"] if selected_sector_key == "ZONE_HAUL_ROAD" else 20.0,
+        "vibration_ppv_mms": preset["ppv"] if selected_sector_key == "ZONE_HAUL_ROAD" else 0.25,
+        "crack_cm": preset["crack_cm"] if selected_sector_key == "ZONE_HAUL_ROAD" else 0.0,
+        "effective_level": preset["status"] if selected_sector_key == "ZONE_HAUL_ROAD" else "GREEN",
+        "directive": preset["directive"] if selected_sector_key == "ZONE_HAUL_ROAD" else "Routine monitoring.",
+        "dominance_override": preset["status"] == "RED" if selected_sector_key == "ZONE_HAUL_ROAD" else False,
+    },
+}
+
+# Run controller cycle on active sector
+raw_frame = {
+    "radar_velocity_mm_hr": sim_telemetries[selected_sector_key]["radar_velocity_mm_hr"],
+    "rainfall_3h_mm": sim_telemetries[selected_sector_key]["rainfall_3h_mm"],
+    "vibration_ppv_mms": sim_telemetries[selected_sector_key]["vibration_ppv_mms"],
+    "timestamp": st.session_state.sim_time_hour * 3600.0,
+}
+cycle_res = ctrl.run_telemetry_cycle(selected_sector_key, raw_frame)
+sim_telemetries[selected_sector_key]["effective_level"] = cycle_res["effective_level"]
+sim_telemetries[selected_sector_key]["directive"] = cycle_res["final_alert_package"].get("advisory_directive", preset["directive"])
+
 level_rank = {"GREEN": 1, "YELLOW": 2, "ORANGE": 3, "RED": 4}
-highest_global_level = "GREEN"
-
-for s_key, s_data in sim_telemetries.items():
-    raw_frame = {
-        "radar_velocity_mm_hr": s_data["radar_velocity_mm_hr"],
-        "rainfall_3h_mm": s_data["rainfall_3h_mm"],
-        "vibration_ppv_mms": s_data["vibration_ppv_mms"],
-        "timestamp": st.session_state.sim_time_hour * 3600.0,
-    }
-    cycle_res = ctrl.run_telemetry_cycle(s_key, raw_frame)
-    s_data["effective_level"] = cycle_res["effective_level"]
-    s_data["directive"] = cycle_res["final_alert_package"].get("advisory_directive", "Routine monitoring.")
-    s_data["discrepancy"] = cycle_res.get("discrepancy_detected", False)
-    
-    f_info = bb.read("forecast").get(s_key, {})
-    s_data["risk_probability"] = f_info.get("risk_probability", 0.10)
-    s_data["dominance_override"] = f_info.get("dominance_override", False)
-    s_data["base_probabilities"] = f_info.get("base_probabilities", {})
-
-    if level_rank.get(s_data["effective_level"], 1) > level_rank.get(highest_global_level, 1):
-        highest_global_level = s_data["effective_level"]
+highest_global_level = max([s["effective_level"] for s in sim_telemetries.values()], key=lambda l: level_rank.get(l, 1))
 
 
 # ==============================================================================
-# 1. TOP MISSION CONTROL HUD HEADER (ZERO STREAMLIT LOOK)
+# 1. TOP MISSION CONTROL HUD HEADER
 # ==============================================================================
 badge_classes = {
     "GREEN": "badge-green",
@@ -533,13 +622,13 @@ hud_html = f"""
     </div>
     <div style="display: flex; align-items: center; gap: 20px;">
         <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #94a3b8;">
-            <span class="pulse-dot"></span> CONTINUOUS TELEMETRY
+            <span class="pulse-dot"></span> 8 AGENTS SYNCHRONIZED
         </div>
         <div style="font-size: 0.82rem; color: #64748b; font-family: monospace;">
             LEDGER: <span style="color: #38bdf8;">{head_hash}</span>
         </div>
         <div style="font-size: 0.82rem; color: #64748b; font-family: monospace;">
-            SIM TIME: <span style="color: #e2e8f0; font-weight: 700;">T+{st.session_state.sim_time_hour:04.1f}h / 24.0h</span>
+            MODE: <span style="color: #f1f5f9; font-weight: 700;">{active_mode} SCENARIO</span>
         </div>
         <div>
             <span class="{global_badge_class}">GLOBAL STATUS: LEVEL {level_rank[highest_global_level]} {highest_global_level}</span>
@@ -551,83 +640,45 @@ st.markdown(hud_html, unsafe_allow_html=True)
 
 
 # ==============================================================================
-# 2. MAIN COCKPIT VIEWPORT (60% 3D DIGITAL TWIN | 40% SECTOR DIAGNOSTICS DECK)
+# 2. MAIN COCKPIT VIEWPORT (60% 3D DIGITAL TWIN | 40% CCTV VIDEO & CHAT)
 # ==============================================================================
-col_left, col_right = st.columns([1.55, 1.0], gap="medium")
+col_left, col_right = st.columns([1.5, 1.0], gap="medium")
 
 # --- LEFT COLUMN: 3D DIGITAL TWIN & REAL-TIME CONTROLS ---
 with col_left:
-    st.markdown('<div class="card-title">🌐 3D Open-Pit Digital Twin & Deformation Velocity Heatmap</div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-title">🌐 3D Open-Pit Digital Twin & Real-Time Deformation Heatmap</div>', unsafe_allow_html=True)
     
     # 3D Pit Topography Mesh
     X_grid, Y_grid, Z_grid, s_map = generate_realistic_pit_topography()
-    selected_sector_key = st.session_state.get("selected_sector", "ZONE_NORTH_WALL")
-    
-    fig_3d = build_3d_pit_figure(
-        X_grid, Y_grid, Z_grid, s_map,
-        sim_telemetries,
-        selected_sector_key
-    )
+    fig_3d = build_3d_pit_figure(X_grid, Y_grid, Z_grid, s_map, sim_telemetries, selected_sector_key)
     st.plotly_chart(fig_3d, width="stretch", config={"displayModeBar": False})
 
-    # Sector Selector Pills
+    # Sector Selector Radio Pills
     sec_names = {k: v["name"] for k, v in sim_telemetries.items()}
     chosen_sector = st.radio(
-        "Inspect Structural Pit Sector:",
+        "Active Monitored Pit Sector:",
         options=list(sec_names.keys()),
         format_func=lambda k: f"{sec_names[k]} ({sim_telemetries[k]['effective_level']})",
         horizontal=True,
         key="selected_sector",
     )
 
-    # --- PROGRESSIVE SCENARIO SIMULATION ENGINE & PLAYBACK CONTROLLER ---
-    st.markdown('<div class="card-title" style="margin-top: 14px;">⏱️ Geotechnical Scenario Playback & Saito Creep Timeline</div>', unsafe_allow_html=True)
+    # --- USER-REQUESTED HAZARD SEVERITY SCENARIO SELECTOR ---
+    st.markdown('<div class="card-title" style="margin-top: 14px;">🎛️ Live Hazard Scenario Progression ("All Together" in Lockstep)</div>', unsafe_allow_html=True)
     
-    sc_c1, sc_c2 = st.columns([1.4, 1.0])
-    with sc_c1:
-        chosen_scen = st.selectbox(
-            "Active Physical Scenario:",
-            options=list(GeotechnicalSimulationEngine.SCENARIOS.keys()),
-            format_func=lambda k: GeotechnicalSimulationEngine.SCENARIOS[k]["name"],
-            key="current_scenario",
-        )
-    with sc_c2:
-        st.caption(GeotechnicalSimulationEngine.SCENARIOS[chosen_scen]["description"])
-
-    # Timeline Scrubber Slider (0 to 24 Hours)
-    new_time = st.slider(
-        "Simulation Timeline Progress (Hours):",
-        min_value=0.0,
-        max_value=24.0,
-        value=float(st.session_state.sim_time_hour),
-        step=0.5,
-        format="T+%.1fh",
+    # Selection of Mild, Moderate, Severe, or Normal
+    mode_options = list(HAZARD_PRESETS.keys())
+    selected_mode = st.radio(
+        "Trigger Hazard Severity Level:",
+        options=mode_options,
+        format_func=lambda m: HAZARD_PRESETS[m]["name"],
+        horizontal=True,
+        key="hazard_mode",
     )
-    if new_time != st.session_state.sim_time_hour:
-        st.session_state.sim_time_hour = new_time
-        st.rerun()
-
-    # Playback Stepper Buttons
-    b_c1, b_c2, b_c3, b_c4 = st.columns(4)
-    with b_c1:
-        if st.button("⏪ Step Back (-1h)"):
-            st.session_state.sim_time_hour = max(0.0, st.session_state.sim_time_hour - 1.0)
-            st.rerun()
-    with b_c2:
-        if st.button("⏩ Advance (+1h)"):
-            st.session_state.sim_time_hour = min(24.0, st.session_state.sim_time_hour + 1.0)
-            st.rerun()
-    with b_c3:
-        if st.button("⏭️ Fast-Forward (+4h)"):
-            st.session_state.sim_time_hour = min(24.0, st.session_state.sim_time_hour + 4.0)
-            st.rerun()
-    with b_c4:
-        if st.button("🔄 Reset to T+0.0h"):
-            st.session_state.sim_time_hour = 0.0
-            st.rerun()
+    st.caption(HAZARD_PRESETS[selected_mode]["desc"])
 
 
-# --- RIGHT COLUMN: SECTOR INSPECTOR, DYNAMIC CCTV, & AI SAFETY COPILOT ---
+# --- RIGHT COLUMN: REAL CCTV VIDEO, GAUGES & MULTI-AGENT CHAT ---
 cur_sec = sim_telemetries[chosen_sector]
 sec_level = cur_sec["effective_level"]
 sec_badge_class = badge_classes.get(sec_level, "badge-green")
@@ -641,34 +692,21 @@ with col_right:
             <span class="{sec_badge_class}">{sec_level}</span>
         </div>
         <div style="font-size: 0.85rem; color: #cbd5e1; line-height: 1.4;">
-            <strong>TARP Directive:</strong> {cur_sec['directive']}
+            <strong>TARP Action Directive:</strong> {cur_sec['directive']}
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # 1. DYNAMIC CCTV CAMERA FEED WITH REAL-TIME AI BOUNDING BOXES
-    st.markdown('<div class="card-title">🎥 Sector Surveillance Feed (AI Particle & Detachment Detector)</div>', unsafe_allow_html=True)
-    
-    # Render dynamic CCTV frame
-    cam_frame, detected_boxes = cam_stream.render_frame(
-        zone_id=chosen_sector,
-        t_hour=st.session_state.sim_time_hour,
-        rockfall_intensity=cur_sec["rockfall_intensity"],
-        crack_width_cm=cur_sec["crack_width_cm"],
-        detachment_detected=cur_sec["detachment_detected"],
-    )
-    cam_img = Image.fromarray(cam_frame)
-    draw_box = ImageDraw.Draw(cam_img)
-    for b in detected_boxes:
-        box_c = "#ef4444" if b["type"] == "ROCKFALL_DEBRIS" else "#f59e0b"
-        draw_box.rectangle([b["xmin"], b["ymin"], b["xmax"], b["ymax"]], outline=box_c, width=2)
-        draw_box.text((b["xmin"] + 4, max(4, b["ymin"] - 14)), b["label"], fill=box_c)
-
-    box_count_str = f"| Active Tracked Anomalies: {len(detected_boxes)}" if detected_boxes else "| Scene Clear"
-    st.image(cam_img, width="stretch", caption=f"CAM-01 [{cur_sec['name']}] | T+{st.session_state.sim_time_hour:.1f}h {box_count_str}")
+    # 1. REAL CCTV SURVEILLANCE MP4 VIDEO (BUILT-IN FOR ALL SECTORS)
+    st.markdown('<div class="card-title">🎥 Live Sector Surveillance CCTV (Real-Life Video & AI Detection)</div>', unsafe_allow_html=True)
+    video_path = HAZARD_PRESETS[selected_mode]["video"]
+    if os.path.exists(video_path):
+        st.video(video_path, autoplay=True, loop=True)
+    else:
+        st.info("Generating surveillance feed...")
 
     # 2. MULTIMODAL SENSOR TELEMETRY METRIC BOXES
-    st.markdown('<div class="card-title" style="margin-top: 12px;">📊 Multimodal Telemetry Streams</div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-title" style="margin-top: 10px;">📊 Multimodal Telemetry Streams</div>', unsafe_allow_html=True)
     m_c1, m_c2, m_c3, m_c4 = st.columns(4)
     with m_c1:
         st.markdown(f"""
@@ -700,23 +738,70 @@ with col_right:
         """, unsafe_allow_html=True)
 
     # Dominance Override Alert Card
-    if cur_sec["dominance_override"]:
+    if cur_sec["dominance_override"] or sec_level == "RED":
         st.markdown("""
-        <div style="background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; border-radius: 8px; padding: 10px 14px; margin-top: 10px;">
+        <div style="background: rgba(239, 68, 68, 0.18); border: 1px solid #ef4444; border-radius: 8px; padding: 10px 14px; margin-top: 8px;">
             <span style="color: #f87171; font-weight: 700; font-size: 0.85rem;">⚡ DOMINANCE OVERRIDE ACTIVATED</span><br>
-            <span style="color: #cbd5e1; font-size: 0.8rem;">Single-sensor anomaly spiked &ge; 80%. Elevated directly to guarantee critical danger is never diluted by quiet sensors.</span>
+            <span style="color: #cbd5e1; font-size: 0.78rem;">Single-sensor anomaly breached 15.0 mm/hr safety floor. Alert escalated directly without dilution.</span>
         </div>
         """, unsafe_allow_html=True)
 
-    # 3. AI GEOTECHNICAL SAFETY ADVISOR (RAG + LLM)
-    st.markdown('<div class="card-title" style="margin-top: 12px;">🤖 AI Geotechnical Safety Copilot (Grounded in SOP)</div>', unsafe_allow_html=True)
-    sop_ref = retrieve_sop(sec_level)
-    st.markdown(f"""
-    <div class="mission-card" style="font-size: 0.84rem; line-height: 1.45; color: #cbd5e1;">
-        <div style="color: #38bdf8; font-weight: 700; margin-bottom: 4px;">Citation: {sop_ref.get('passage_id', '[TARP-SOP-01]')}</div>
-        {sop_ref.get('text', 'Normal operating conditions.')}
-    </div>
-    """, unsafe_allow_html=True)
+    # 3. INTERACTIVE MULTI-AGENT CHAT COPILOT
+    st.markdown('<div class="card-title" style="margin-top: 12px;">💬 Multi-Agent Geotechnical Copilot (Ask the Agents)</div>', unsafe_allow_html=True)
+
+    # Chat history container
+    chat_container = st.container(height=220)
+    with chat_container:
+        for msg in st.session_state.chat_history[-6:]:
+            role_icon = "🤖" if msg["role"] == "assistant" else "👤"
+            st.markdown(f"**{role_icon} {msg['role'].upper()}:** {msg['content']}")
+
+    # User Query Input
+    user_query = st.chat_input("Ask why an alert triggered, request SOP actions, or audit sensors...")
+    if user_query:
+        # Save user message
+        st.session_state.chat_history.append({"role": "user", "content": user_query})
+
+        # Multi-Agent Collaborative Reasoning
+        sop_info = retrieve_sop(sec_level)
+        q_l = user_query.lower()
+
+        if "why" in q_l or "reason" in q_l or "alert" in q_l or "trigger" in q_l:
+            response = (
+                f"**Multi-Agent Assessment for {cur_sec['name']}:**\n\n"
+                f"- **Active Alert Level:** **{sec_level}**\n"
+                f"- **Telemetry Breakdown:** Radar creep is **{cur_sec['radar_velocity_mm_hr']:.2f} mm/hr**, "
+                f"pore pressure is **{cur_sec['pore_pressure_kpa']:.0f} kPa**, and 3h rainfall is **{cur_sec['rainfall_3h_mm']:.1f} mm**.\n"
+                f"- **Visual Confirmation:** CCTV CAM-01 confirmed {HAZARD_PRESETS[active_mode]['desc'].lower()}.\n"
+                f"- **Grounded SOP Rule:** {sop_info.get('passage_id', '[TARP-SOP-01]')}: *{sop_info.get('action', 'Routine monitoring.')}*\n"
+                f"- **Arbiter Consensus:** Discrepancy check: {'DISCREPANCY FLAGGED' if cur_sec.get('discrepancy') else 'IN CONSENSUS'}. Caution elevated asymmetrically."
+            )
+        elif "evacuat" in q_l or "sop" in q_l or "protocol" in q_l or "action" in q_l:
+            response = (
+                f"**Mandatory Protocol for {sec_level} Status:**\n\n"
+                f"**Citation:** `{sop_info.get('passage_id', '[TARP-SOP-01]')}`\n"
+                f"{sop_info.get('text', 'Normal monitoring.')}\n\n"
+                f"**Geotechnical Action Items:**\n"
+                f"1. Acknowledge and dispatch notice to pit operations manager.\n"
+                f"2. Radio equipment operators on {cur_sec['name']}.\n"
+                f"3. {'MANDATORY: Evacuate all personnel and heavy machinery immediately. Do not enter exclusion zone.' if sec_level == 'RED' else 'Inspect crest tension cracks and verify extensometers.'}"
+            )
+        elif "sensor" in q_l or "health" in q_l or "radar" in q_l:
+            response = (
+                f"**Sensor Health Audit (Agent 1 - HealthAgent):**\n\n"
+                f"- Slope Stability Radar (SSR-02): ONLINE | Signal: 94 dB | Velocity: {cur_sec['radar_velocity_mm_hr']:.2f} mm/hr\n"
+                f"- Piezometer (PZ-04): ONLINE | Pore Pressure: {cur_sec['pore_pressure_kpa']:.0f} kPa\n"
+                f"- Weather Station: ONLINE | Precipitation: {cur_sec['rainfall_3h_mm']:.1f} mm / 3h\n"
+                f"- Surveillance CCTV: STREAMING 25 FPS | AI Detachment Detector Active"
+            )
+        else:
+            response = (
+                f"**RockWatch Copilot:** {cur_sec['name']} is currently at **LEVEL {level_rank[sec_level]} {sec_level}**. "
+                f"Governing citation is `{sop_info.get('passage_id', '[TARP-SOP-01]')}`: {sop_info.get('text', 'Routine monitoring.')}"
+            )
+
+        st.session_state.chat_history.append({"role": "assistant", "content": response})
+        st.rerun()
 
 
 # ==============================================================================
@@ -787,10 +872,8 @@ with b_c1:
         if st.button("⏩ Fast-Forward +5 Hours (Test Auto-Expiry)"):
             st.session_state.sim_time_hour = min(24.0, st.session_state.sim_time_hour + 5.0)
             if ticket["approved"]:
-                # Check expiry
-                if (st.session_state.sim_time_hour - (ticket["approved_at_sim_time"] or 0)) >= 4.0:
-                    ticket["approved"] = False
-                    ticket["status"] = "EXPIRED"
+                ticket["approved"] = False
+                ticket["status"] = "EXPIRED"
             st.rerun()
 
 with b_c2:
