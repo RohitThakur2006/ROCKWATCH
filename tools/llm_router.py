@@ -49,7 +49,7 @@ class LLMRouter:
         """Loads configuration from environment variables."""
         self.litellm_base = os.getenv("LITELLM_API_BASE", "http://localhost:4000/v1").rstrip("/")
         self.litellm_key = os.getenv("LITELLM_API_KEY", "sk-litellm-local")
-        self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        self.model_name = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-light")
         self.timeout_seconds = float(os.getenv("LLM_TIMEOUT_SECONDS", "6.0"))
 
         # Parse keys for direct multi-key pool

@@ -20,7 +20,7 @@ def test_multi_key_parsing(monkeypatch):
     test_keys = ",".join([f"key_sample_{i}" for i in range(1, 12)])
     monkeypatch.setenv("GEMINI_API_KEYS", test_keys)
     monkeypatch.setenv("GEMINI_API_KEY", "fallback_single_key")
-    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.0-flash")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.5-flash-light")
 
     router = LLMRouter()
     status = router.get_status()
@@ -29,7 +29,7 @@ def test_multi_key_parsing(monkeypatch):
     assert status["total_keys"] == 12
     assert status["total_rpm_capacity"] == 12 * 15  # 180 RPM
     assert status["daily_capacity"] == 12 * 500      # 6,000 requests/day
-    assert status["model_name"] == "gemini-2.0-flash"
+    assert status["model_name"] == "gemini-3.5-flash-light"
 
 
 def test_round_robin_rotation(monkeypatch):

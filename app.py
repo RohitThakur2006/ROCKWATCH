@@ -6,8 +6,8 @@ Simplified, intuitive, human-centered design:
   cumulative displacement, Factor of Safety) are loaded directly from the project's authentic CSV files
   (data/displacement_telemetry.csv, data/environmental_telemetry.csv, data/seismic_telemetry.csv,
   data/slope_stability_geotech.csv). No hardcoded or random numbers!
-- Transparent Gemini API Integration: Full support for real live Google Gemini 1.5 Flash LLM calls
-  via REST API when a Gemini API key is provided (or set in GEMINI_API_KEY). If no key is entered,
+- Transparent Gemini API Integration: Full support for real live Gemini 3.5 Flash-Lite LLM calls
+  via LiteLLM proxy or direct multi-key pool. If no key is entered,
   it explicitly informs the user and runs on the local deterministic RAG rule engine.
 - 3D Open-Pit Digital Twin as the visual centerpiece: natural lookout observation deck camera angle,
   clean floating terrain (NO ugly CAD gridlines or axis boxes), authentic geological rock strata,
@@ -1046,7 +1046,7 @@ with st.expander("🔒 Geotechnical Administration, Multi-Agent Telemetry & Audi
         st.markdown("**⚡ Multi-Agent LLM Call Telemetry & LiteLLM 11-Key Gemini Pool Monitor**")
         st.caption(
             "Real-time monitoring of all LLM API invocations across the 8 specialized agents and the Copilot. "
-            "Routes dynamically to your local LiteLLM proxy or direct 11-key Gemini Flash pool."
+            "Routes dynamically to your local LiteLLM proxy or direct 11-key Gemini 3.5 Flash-Lite pool."
         )
 
         stat_c1, stat_c2, stat_c3, stat_c4 = st.columns(4)
