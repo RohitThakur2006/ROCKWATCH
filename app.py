@@ -919,6 +919,31 @@ col_left, col_right = st.columns([1.5, 1.0], gap="medium")
 with col_left:
     st.markdown('<div class="card-title">🌐 Geotechnical Mine Engineering Visualization Suite</div>', unsafe_allow_html=True)
 
+    # Sector Selector Radio Pills
+    sec_names = {k: v["name"] for k, v in sim_telemetries.items()}
+    chosen_sector = st.radio(
+        "Active Monitored Pit Sector:",
+        options=list(sec_names.keys()),
+        format_func=lambda k: f"{sec_names[k]} ({sim_telemetries[k]['effective_level']})",
+        horizontal=True,
+        key="selected_sector",
+    )
+
+    # Hazard Severity Level Selector
+    mode_options = list(HAZARD_PRESETS.keys())
+    selected_mode = st.radio(
+        "Trigger Hazard Severity Level:",
+        options=mode_options,
+        format_func=lambda m: HAZARD_PRESETS[m]["name"],
+        horizontal=True,
+        key="hazard_mode",
+    )
+    st.caption(HAZARD_PRESETS[selected_mode]["desc"])
+
+    cur_sec = sim_telemetries[chosen_sector]
+    sec_level = cur_sec["effective_level"]
+    sec_badge_class = badge_classes.get(sec_level, "badge-green")
+
     geotech_view = st.radio(
         "Active Spatial & Engineering View:",
         options=[
@@ -933,7 +958,7 @@ with col_left:
 
     if geotech_view == "🌐 3D Multi-Lobed Open-Pit Digital Twin":
         X_grid, Y_grid, Z_grid, s_map = generate_realistic_pit_topography()
-        fig_3d = build_3d_pit_figure(X_grid, Y_grid, Z_grid, s_map, sim_telemetries, selected_sector_key)
+        fig_3d = build_3d_pit_figure(X_grid, Y_grid, Z_grid, s_map, sim_telemetries, chosen_sector)
         st.plotly_chart(fig_3d, width="stretch", config={"displayModeBar": False})
     elif geotech_view == "📐 2D Highwall Cross-Section & Failure Arc (FoS)":
         fig_sec = build_geotech_cross_section_figure(cur_sec['name'], selected_mode, cur_sec)
@@ -944,30 +969,6 @@ with col_left:
     else:
         fig_topo = build_sensor_topology_figure(sim_telemetries)
         st.plotly_chart(fig_topo, width="stretch", config={"displayModeBar": False})
-
-    # Sector Selector Radio Pills
-    sec_names = {k: v["name"] for k, v in sim_telemetries.items()}
-    chosen_sector = st.radio(
-        "Active Monitored Pit Sector:",
-        options=list(sec_names.keys()),
-        format_func=lambda k: f"{sec_names[k]} ({sim_telemetries[k]['effective_level']})",
-        horizontal=True,
-        key="selected_sector",
-    )
-
-    # --- USER-REQUESTED HAZARD SEVERITY SCENARIO SELECTOR ---
-    st.markdown('<div class="card-title" style="margin-top: 14px;">🎛️ Live Hazard Scenario Progression ("All Together" in Lockstep)</div>', unsafe_allow_html=True)
-
-    # Selection of Mild, Moderate, Severe, or Normal
-    mode_options = list(HAZARD_PRESETS.keys())
-    selected_mode = st.radio(
-        "Trigger Hazard Severity Level:",
-        options=mode_options,
-        format_func=lambda m: HAZARD_PRESETS[m]["name"],
-        horizontal=True,
-        key="hazard_mode",
-    )
-    st.caption(HAZARD_PRESETS[selected_mode]["desc"])
 
 
 # --- RIGHT COLUMN: REAL CCTV VIDEO, GAUGES & MULTI-AGENT CHAT ---
