@@ -5,6 +5,7 @@ Plain Python functions for Geotech Advisor Agent.
 Operates deterministically without external vector embedding API dependencies.
 """
 
+import functools
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -15,6 +16,7 @@ def _tokenize(text: str) -> set[str]:
     return set(re.findall(r"\b[a-zA-Z0-9_\-]{3,}\b", text.lower()))
 
 
+@functools.lru_cache(maxsize=16)
 def _load_passages(docs_dir: str) -> List[Tuple[str, str, str]]:
     """
     Loads all passages marked with [PASSAGE-ID] from markdown files in docs_dir.

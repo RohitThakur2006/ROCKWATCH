@@ -68,8 +68,8 @@ class AdvisorAgent(BaseAgent):
         llm_synthesized = False
         model_source = "DETERMINISTIC_RULES"
 
-        # Multi-Agent LLM Call: Query LiteLLM / 11-key Gemini pool if enabled
-        if context.get("enable_llm", True) and sop_doc.get("found"):
+        # Multi-Agent LLM Call: Query LiteLLM / 11-key Gemini pool only if explicitly enabled
+        if context.get("enable_llm", False) and sop_doc.get("found"):
             router = get_llm_router()
             llm_res = router.generate_advisor_explanation(
                 zone_id=zone_id,
